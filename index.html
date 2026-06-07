@@ -215,11 +215,12 @@ let speech = null;
 if (typeof ANIM_DATA !== 'undefined'){
   const raw = new Int16Array(
     Uint8Array.from(atob(ANIM_DATA.data), c=>c.charCodeAt(0)).buffer);
+  const sIdx = b64u16(ANIM_DATA.sparseIdx);     // verts that actually move
   const attr = new THREE.BufferAttribute(
     new Float32Array(b64f32(HEAD_DATA.pos).length), 3);
   attr.setUsage(THREE.DynamicDrawUsage);
   headGeo.morphAttributes.position.push(attr);   // slot N_MORPH
-  speech = {raw, attr, frames:ANIM_DATA.frames, fps:ANIM_DATA.fps,
+  speech = {raw, sIdx, attr, frames:ANIM_DATA.frames, fps:ANIM_DATA.fps,
             scale:ANIM_DATA.scale, playing:false, t0:0,
             audio: ANIM_DATA.wav ? new Audio(ANIM_DATA.wav) : null};
 }
@@ -397,14 +398,21 @@ function updateSpeech(t){
   const f = (t - speech.t0)/1000 * speech.fps;
   if(f >= speech.frames-1){ stopSpeech(); return; }
   const i0 = Math.floor(f), fr = f - i0;
-  const a = speech.attr.array, raw = speech.raw, n = a.length, s = speech.scale;
-  const o0 = i0*n, o1 = o0+n;
-  for(let i=0;i<n;i++) a[i] = (raw[o0+i]*(1-fr) + raw[o1+i]*fr) * s;
+  const a = speech.attr.array, raw = speech.raw, s = speech.scale;
+  const sIdx = speech.sIdx, nS = sIdx.length, stride = nS*3;
+  const o0 = i0*stride, o1 = o0+stride;
+  for(let k=0;k<nS;k++){
+    const vi = sIdx[k]*3, o = k*3;
+    a[vi]   = (raw[o0+o]  *(1-fr) + raw[o1+o]  *fr) * s;
+    a[vi+1] = (raw[o0+o+1]*(1-fr) + raw[o1+o+1]*fr) * s;
+    a[vi+2] = (raw[o0+o+2]*(1-fr) + raw[o1+o+2]*fr) * s;
+  }
   speech.attr.needsUpdate = true;
 }
 function startSpeech(){
   if(!speech) return;
   speech.playing = true; speech.t0 = performance.now();
+  mouth.visible = false;                 // FLAME's real lips take over
   if(speech.audio){ speech.audio.currentTime = 0; speech.audio.play().catch(()=>{}); }
   statusEl.textContent = `FORM ${IDENTITY_NAMES[curId]} · SPEAKING`;
 }
@@ -412,6 +420,7 @@ function stopSpeech(){
   if(!speech) return;
   speech.playing = false;
   speech.attr.array.fill(0); speech.attr.needsUpdate = true;
+  mouth.visible = true;
   if(speech.audio) speech.audio.pause();
   statusEl.textContent = `FORM ${IDENTITY_NAMES[curId]} · STABLE`;
 }

@@ -76,6 +76,14 @@ Producing `anim_data.js` (on a machine with internet + PyTorch):
    `anim_data.js` (serve gzipped; it compresses ~4x)
 5. Put your .wav next to `index.html`, reload, press SPACE
 
+`bake_anim.js` output is sparse: verts whose peak motion is below
+`--min-move` (default 0.3 mm — invisible at typical view size) are dropped,
+which cuts file size ~40% with 99.7% of motion energy retained. A baked
+demo clip (`anim_data.js`, FaceFormer on its bundled `demo/wav/test.wav`)
+is committed so the repo lip-syncs out of the box; drop the matching
+`test.wav` next to `index.html` for audio (not committed — it's FaceFormer's
+asset).
+
 Any VOCASET-trained vertex-output model works the same way (CodeTalker,
 etc.) — the only contract is FLAME topology, `(T, 5023, 3)`.
 
