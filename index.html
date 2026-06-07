@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>T H E · E N D · H E A D</title>
+<title>T H E · E N D · H E A D — FLAME</title>
 <style>
   :root{
     --grid-green:#00ff66;
@@ -73,6 +73,7 @@
 <footer><p id="status">FORM 01 · STABLE — MOVE THE CURSOR, IT WATCHES</p></footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="head_data.js"></script>
 <script>
 /* ============================================================
    1. MATRIX RAIN BACKDROP
@@ -119,7 +120,7 @@ for(let y=0;y<nCells;y++){
     cellBase[y][x]=b;
   }
 }
-let glitchLevel = 0;   // 0..1, spiked during morphs
+let glitchLevel = 0;
 function paintGrid(t){
   tctx.fillStyle='#000400';
   tctx.fillRect(0,0,TEX,TEX);
@@ -138,7 +139,6 @@ function paintGrid(t){
                     CELL-GAP*2 + (wide?CELL*0.6:0), CELL-GAP*2);
     }
   }
-  // glitch: horizontal row tears, like signal interference
   if(glitchLevel > 0.05){
     const tears = Math.floor(glitchLevel*9);
     for(let i=0;i<tears;i++){
@@ -180,120 +180,34 @@ eyeGlowLight.position.set(0, 0.2, 2);
 scene.add(eyeGlowLight);
 
 /* ============================================================
-   4. IDENTITY SCULPTOR
+   4. FLAME HEAD — decode baked data from head_data.js
    ------------------------------------------------------------
-   Each identity is a parameter set; sculpt() maps a unit-sphere
-   vertex to that identity's skull. Same topology for every face
-   = perfect morph targets.
+   HEAD_DATA holds the FLAME 2023 Open head (eyeballs stripped),
+   4 identity morph deltas (vs identity 0 as base) + 2 chaos
+   deltas, cylindrical UVs, and per-identity eye/mouth rigs.
+   FLAME 2023 Open: CC-BY-4.0 — Li et al., SIGGRAPH Asia 2017.
    ============================================================ */
-const gauss  = (v,c,s)=>Math.exp(-((v-c)*(v-c))/(2*s*s));
-const sstep  = (v,a,b)=>{ const t=Math.min(1,Math.max(0,(v-a)/(b-a))); return t*t*(3-2*t); };
-const lerp   = (a,b,t)=>a+(b-a)*t;
+const b64f32 = s => new Float32Array(Uint8Array.from(atob(s), c=>c.charCodeAt(0)).buffer);
+const b64u16 = s => new Uint16Array(Uint8Array.from(atob(s), c=>c.charCodeAt(0)).buffer);
 
-function sculpt(x,y,z,p){
-  let vx=x, vy=y*p.elong, vz=z;
-  if(vz<0) vz *= p.skullBack;                                   // skull profile
-  const tFall = gauss(vy,0.45,0.25)*sstep(Math.abs(vx),0.3,0.9);
-  vx *= 1 - p.temple*tFall;                                     // temples
-  if(vz>0) vz *= 1 + (p.brow-1)*gauss(vy,0.30,0.10)*sstep(vz,0.4,0.9); // brow ridge
-  const cFall = gauss(vy,p.cheekY,0.16)*sstep(Math.abs(vx),0.35,0.75)*sstep(vz,0.1,0.5);
-  const cs = 1 + p.cheek*cFall;                                 // cheeks / cheekbones
-  vx*=cs; if(vz>0) vz*=cs;
-  if(vy<-0.22){                                                 // jaw + chin
-    const t = Math.min(1,(-vy-0.22)/0.78);
-    const taper = 1 - p.jawTaper*t*t;
-    vx *= taper*p.jawWidth;
-    vz *= taper;
-    if(vz>0) vz += p.chinF*t*t;
-  }
-  const nf = gauss(vy,p.noseY,0.13)*gauss(vx,0,p.noseW)*sstep(vz,0.72,0.96);
-  vz += p.noseL*nf*2.2;                                         // nose
-  const lf = gauss(vy,-0.45,0.07)*gauss(vx,0,0.14)*sstep(vz,0.55,0.88);
-  vz += p.lip*lf*2.0;                                           // lips
-  return [vx,vy,vz];
-}
+const IDENTITY_NAMES = HEAD_DATA.meta.identities;
+const N_ID = IDENTITY_NAMES.length;          // 5
+const RIGS = HEAD_DATA.rigs;
+const CHAOS_A = N_ID - 1;                    // morph slots: 0..3 identities 1..4
+const CHAOS_B = N_ID;                        // 4 = chaos1, 5 = chaos2
 
-/* five distinct skulls + facial rig (eye/mouth placement) */
-const IDENTITIES = [
- { name:'01 · MONOLITH',
-   p:{temple:.02, brow:1.07, cheek:.06,  cheekY:-.02, jawTaper:.30, jawWidth:1.08,
-      chinF:.05, noseL:.09, noseW:.20, noseY:-.05, lip:.06, skullBack:.95, elong:.98},
-   rig:{eyeX:.33, eyeY:.17, eyeSX:.170, eyeSY:.210, tilt: .00, mouthW:.24, mouthY:-.45} },
- { name:'02 · BLADE',
-   p:{temple:.14, brow:1.04, cheek:.10,  cheekY:.12,  jawTaper:.55, jawWidth:.86,
-      chinF:.12, noseL:.16, noseW:.11, noseY:-.04, lip:.02, skullBack:.90, elong:1.06},
-   rig:{eyeX:.29, eyeY:.18, eyeSX:.150, eyeSY:.255, tilt: .12, mouthW:.18, mouthY:-.47} },
- { name:'03 · ORB',
-   p:{temple:.00, brow:1.00, cheek:.14,  cheekY:-.08, jawTaper:.28, jawWidth:1.02,
-      chinF:.02, noseL:.07, noseW:.15, noseY:-.08, lip:.05, skullBack:.97, elong:.95},
-   rig:{eyeX:.31, eyeY:.15, eyeSX:.190, eyeSY:.190, tilt:-.05, mouthW:.22, mouthY:-.44} },
- { name:'04 · WRAITH',
-   p:{temple:.10, brow:1.09, cheek:-.12, cheekY:-.02, jawTaper:.60, jawWidth:.82,
-      chinF:.10, noseL:.14, noseW:.10, noseY:-.02, lip:.00, skullBack:.88, elong:1.08},
-   rig:{eyeX:.27, eyeY:.19, eyeSX:.150, eyeSY:.270, tilt: .18, mouthW:.15, mouthY:-.48} },
- { name:'05 · TITAN',
-   p:{temple:.04, brow:1.12, cheek:.08,  cheekY:.04,  jawTaper:.36, jawWidth:1.12,
-      chinF:.08, noseL:.12, noseW:.22, noseY:-.07, lip:.08, skullBack:.96, elong:1.02},
-   rig:{eyeX:.34, eyeY:.16, eyeSX:.180, eyeSY:.200, tilt:-.08, mouthW:.26, mouthY:-.46} },
-];
-/* neutral base the morph shader blends away from */
-const NEUTRAL = {temple:.05, brow:1.03, cheek:.02, cheekY:-.03, jawTaper:.40, jawWidth:1.0,
-                 chinF:.06, noseL:.10, noseW:.16, noseY:-.06, lip:.03, skullBack:.93, elong:1.0};
+const headGeo = new THREE.BufferGeometry();
+headGeo.setAttribute('position', new THREE.BufferAttribute(b64f32(HEAD_DATA.pos), 3));
+headGeo.setAttribute('uv',       new THREE.BufferAttribute(b64f32(HEAD_DATA.uv), 2));
+headGeo.setIndex(new THREE.BufferAttribute(b64u16(HEAD_DATA.idx), 1));
+headGeo.computeVertexNormals();
+headGeo.morphTargetsRelative = true;         // targets are deltas
+headGeo.morphAttributes.position =
+  HEAD_DATA.targets.map(t => new THREE.BufferAttribute(b64f32(t), 3));
 
-/* build a sculpted geometry with morph targets for every identity
-   + two "chaos" noise targets used mid-transition */
-function buildMorphGeometry(widthSegs, heightSegs){
-  const geo = new THREE.SphereGeometry(1, widthSegs, heightSegs);
-  const src = geo.attributes.position.array.slice();   // pristine sphere
-  const count = geo.attributes.position.count;
-
-  const sculptAll = (params)=>{
-    const out = new Float32Array(src.length);
-    for(let i=0;i<count;i++){
-      const [vx,vy,vz] = sculpt(src[i*3], src[i*3+1], src[i*3+2], params);
-      out[i*3]=vx; out[i*3+1]=vy; out[i*3+2]=vz;
-    }
-    return out;
-  };
-
-  const basePos = sculptAll(NEUTRAL);
-  geo.attributes.position.array.set(basePos);
-  geo.attributes.position.needsUpdate = true;
-  geo.computeVertexNormals();
-
-  const targets = IDENTITIES.map(id =>
-    new THREE.Float32BufferAttribute(sculptAll(id.p), 3));
-
-  /* chaos fields: smeary, x-biased noise added over the neutral skull */
-  const chaos = (seed)=>{
-    const out = new Float32Array(src.length);
-    for(let i=0;i<count;i++){
-      const x=src[i*3], y=src[i*3+1], z=src[i*3+2];
-      const n1 = Math.sin(x*9+seed)*Math.cos(y*7+seed*1.7)*Math.sin(z*8+x*3);
-      const dx = Math.sin(y*11+seed)*0.10 + n1*0.06;       // horizontal smear bias
-      const dy = n1*0.045;
-      const dz = Math.cos(x*8+seed*2)*0.06*Math.max(0,z);  // boil the face, not the skull back
-      out[i*3]  = basePos[i*3]  + dx;
-      out[i*3+1]= basePos[i*3+1]+ dy;
-      out[i*3+2]= basePos[i*3+2]+ dz;
-    }
-    return new THREE.Float32BufferAttribute(out, 3);
-  };
-  targets.push(chaos(1.3), chaos(7.8));   // indices 5, 6
-
-  geo.morphAttributes.position = targets;
-  return geo;
-}
-const CHAOS_A = IDENTITIES.length;      // 5
-const CHAOS_B = IDENTITIES.length + 1;  // 6
-
-/* ============================================================
-   5. THE HEAD
-   ============================================================ */
 const headGroup = new THREE.Group();
 scene.add(headGroup);
 
-const skullGeo = buildMorphGeometry(96, 96);
 const skullMat = new THREE.MeshPhongMaterial({
   color: 0x021006,
   emissive: 0x00ff66,
@@ -303,20 +217,18 @@ const skullMat = new THREE.MeshPhongMaterial({
   shininess: 18,
   morphTargets: true,
 });
-const skull = new THREE.Mesh(skullGeo, skullMat);
-skull.scale.set(0.82, 1.06, 0.9);
+const skull = new THREE.Mesh(headGeo, skullMat);
 headGroup.add(skull);
 
-/* wireframe shell, same sculpt pipeline at low res so it morphs too */
-const shellGeo = buildMorphGeometry(24, 24);
-const shell = new THREE.Mesh(shellGeo, new THREE.MeshBasicMaterial({
-  color:0x00ff66, wireframe:true, transparent:true, opacity:0.06, morphTargets:true
+/* wireframe shell shares the geometry (and therefore the morphs) */
+const shell = new THREE.Mesh(headGeo, new THREE.MeshBasicMaterial({
+  color:0x00ff66, wireframe:true, transparent:true, opacity:0.05, morphTargets:true
 }));
-shell.scale.set(0.83, 1.07, 0.91);
+shell.scale.setScalar(1.004);
 headGroup.add(shell);
 
-/* hollow eyes + rim glow */
-function makeEye(side){
+/* hollow eyes: black voids filling the (now empty) FLAME sockets */
+function makeEye(){
   const eye = new THREE.Group();
   const socket = new THREE.Mesh(
     new THREE.SphereGeometry(1, 32, 32),
@@ -324,18 +236,17 @@ function makeEye(side){
   );
   eye.add(socket);
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.95, 1.18, 48),
+    new THREE.RingGeometry(0.95, 1.22, 48),
     new THREE.MeshBasicMaterial({
       color:0x00ff88, transparent:true, opacity:0.35,
       side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false
     })
   );
-  ring.position.z = 0.10;
   eye.add(ring);
-  eye.userData = {side, socket, ring};
+  eye.userData = {socket, ring};
   return eye;
 }
-const eyeL = makeEye(-1), eyeR = makeEye(1);
+const eyeL = makeEye(), eyeR = makeEye();
 headGroup.add(eyeL, eyeR);
 
 const mouth = new THREE.Mesh(
@@ -344,25 +255,31 @@ const mouth = new THREE.Mesh(
 );
 headGroup.add(mouth);
 
-/* facial rig: place eyes/mouth for a blend between two identities */
-function applyRig(a, b, t, jit){
-  const eX = lerp(a.eyeX,b.eyeX,t),  eY = lerp(a.eyeY,b.eyeY,t);
-  const sX = lerp(a.eyeSX,b.eyeSX,t), sY = lerp(a.eyeSY,b.eyeSY,t);
-  const tl = lerp(a.tilt,b.tilt,t);
-  [eyeL,eyeR].forEach(eye=>{
-    const s = eye.userData.side;
-    eye.position.set(s*eX + (Math.random()-.5)*jit*.06,
-                     eY    + (Math.random()-.5)*jit*.06, 0.70);
-    eye.rotation.y = s*0.35;
-    eye.rotation.z = -s*tl;
-    eye.userData.socket.scale.set(sX, sY, 0.13);
-    eye.userData.ring.scale.set(sX*1.06, sY*1.05, 1);
-    eye.userData.ring.material.opacity = 0.35 + (jit>0 ? (Math.random()-.5)*0.3*jit : 0);
+const lerp = (a,b,t)=>a+(b-a)*t;
+const lerp3 = (a,b,t)=>[lerp(a[0],b[0],t), lerp(a[1],b[1],t), lerp(a[2],b[2],t)];
+
+/* place eye/mouth props for a blend between two identity rigs */
+function applyRig(ai, bi, t, jit){
+  const A = RIGS[ai], B = RIGS[bi];
+  [[eyeL,'eyeL'],[eyeR,'eyeR']].forEach(([eye,k])=>{
+    const c = lerp3(A[k].c, B[k].c, t);
+    const r = lerp(A[k].r, B[k].r, t);
+    eye.position.set(c[0] + (Math.random()-.5)*jit*.05,
+                     c[1] + (Math.random()-.5)*jit*.05,
+                     c[2]);
+    const s = r*1.35;                       // overfill the socket -> void
+    eye.userData.socket.scale.setScalar(s);
+    eye.userData.ring.scale.setScalar(r*1.6);
+    eye.userData.ring.position.z = r*1.05;
+    eye.rotation.y = Math.sign(c[0])*0.28;
+    eye.userData.ring.material.opacity =
+      0.35 + (jit>0 ? (Math.random()-.5)*0.3*jit : 0);
   });
-  mouth.scale.set(lerp(a.mouthW,b.mouthW,t), 0.030 + jit*0.02*Math.random(), 0.07);
-  mouth.position.set((Math.random()-.5)*jit*.05, lerp(a.mouthY,b.mouthY,t), 0.74);
+  const m = lerp3(A.mouth, B.mouth, t);
+  mouth.scale.set(0.16, 0.020 + jit*0.02*Math.random(), 0.05);
+  mouth.position.set(m[0] + (Math.random()-.5)*jit*.04, m[1], m[2] + 0.015);
 }
-applyRig(IDENTITIES[0].rig, IDENTITIES[0].rig, 0, 0);
+applyRig(0, 0, 0, 0);
 
 /* halo + motes */
 const haloCv = document.createElement('canvas');
@@ -397,11 +314,11 @@ const motes = new THREE.Points(moteGeo, new THREE.PointsMaterial({
 scene.add(motes);
 
 /* ============================================================
-   6. SHAPE-SHIFT CHOREOGRAPHY
+   5. SHAPE-SHIFT CHOREOGRAPHY (relative morph targets)
    ------------------------------------------------------------
-   hold (5–9s) -> morph (2.6s): identity A fades into identity B
-   while two chaos noise targets spike mid-way and the LED skin
-   tears — exactly the arc in the reference frames.
+   base mesh = identity 0; targets 0..3 = deltas to identities
+   1..4; targets 4,5 = chaos noise. Blending i -> j at e:
+     influence[i-1] = 1-e (if i>0), influence[j-1] = e (if j>0)
    ============================================================ */
 const MORPH_MS = 2600;
 const statusEl = document.getElementById('status');
@@ -412,8 +329,8 @@ const easeInOut = u => u<.5 ? 4*u*u*u : 1-Math.pow(-2*u+2,3)/2;
 function setInfluences(mesh, cur, nxt, e, c1, c2){
   const inf = mesh.morphTargetInfluences;
   for(let i=0;i<inf.length;i++) inf[i]=0;
-  inf[cur] = 1-e;
-  inf[nxt] = e;
+  if(cur>0) inf[cur-1] = 1-e;
+  if(nxt>0) inf[nxt-1] = e;
   inf[CHAOS_A] = c1;
   inf[CHAOS_B] = c2;
 }
@@ -424,12 +341,12 @@ function updateShapeShift(t){
   if(phase==='hold'){
     if(t-phaseStart > holdDur){
       phase='morph'; phaseStart=t;
-      nxtId = (curId + 1 + Math.floor(Math.random()*(IDENTITIES.length-1))) % IDENTITIES.length;
-      statusEl.textContent = `RESEQUENCING → FORM ${IDENTITIES[nxtId].name.slice(0,2)}`;
+      nxtId = (curId + 1 + Math.floor(Math.random()*(N_ID-1))) % N_ID;
+      statusEl.textContent = `RESEQUENCING → FORM ${IDENTITY_NAMES[nxtId].slice(0,2)}`;
       statusEl.classList.add('resequencing');
     } else {
       glitchLevel = Math.max(0, glitchLevel-0.05);
-      applyRig(IDENTITIES[curId].rig, IDENTITIES[curId].rig, 0, 0);
+      applyRig(curId, curId, 0, 0);
       setInfluences(skull,curId,curId,0,0,0);
       setInfluences(shell,curId,curId,0,0,0);
     }
@@ -437,25 +354,25 @@ function updateShapeShift(t){
   if(phase==='morph'){
     const u = Math.min(1,(t-phaseStart)/MORPH_MS);
     const e = easeInOut(u);
-    const bump = Math.sin(Math.PI*u);                 // 0 -> 1 -> 0
-    const c1 = bump*0.55*(0.5+0.5*Math.sin(t*0.021)); // two evolving
-    const c2 = bump*0.45*(0.5-0.5*Math.sin(t*0.017)); // turbulence fields
+    const bump = Math.sin(Math.PI*u);
+    const c1 = bump*0.55*(0.5+0.5*Math.sin(t*0.021));
+    const c2 = bump*0.45*(0.5-0.5*Math.sin(t*0.017));
     glitchLevel = bump;
     setInfluences(skull,curId,nxtId,e,c1,c2);
     setInfluences(shell,curId,nxtId,e,c1,c2);
-    applyRig(IDENTITIES[curId].rig, IDENTITIES[nxtId].rig, e, bump);
+    applyRig(curId, nxtId, e, bump);
     if(u>=1){
       curId = nxtId; phase='hold'; phaseStart=t;
       holdDur = 5000 + Math.random()*4000;
       glitchLevel = 0;
-      statusEl.textContent = `FORM ${IDENTITIES[curId].name} · STABLE`;
+      statusEl.textContent = `FORM ${IDENTITY_NAMES[curId]} · STABLE`;
       statusEl.classList.remove('resequencing');
     }
   }
 }
 
 /* ============================================================
-   7. CONSTRAINED HEAD MOTION (unchanged limits)
+   6. CONSTRAINED HEAD MOTION (unchanged limits)
    yaw ±1.0 rad (~57°) · pitch -0.12 rad up … +0.50 rad down
    ============================================================ */
 const YAW_MAX = 1.0;
@@ -486,13 +403,12 @@ function idleTargets(t){
 }
 
 /* ============================================================
-   8. LOOP
+   7. LOOP
    ============================================================ */
 let texTick = 0;
 function animate(t){
   requestAnimationFrame(animate);
 
-  // glitching skin refreshes faster mid-morph
   const texRate = glitchLevel>0.05 ? 45 : 90;
   if(t - texTick > texRate){ paintGrid(t); gridTex.needsUpdate = true; texTick = t; }
 
