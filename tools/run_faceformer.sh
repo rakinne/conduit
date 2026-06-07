@@ -88,6 +88,36 @@ sys.modules["psbody.mesh"].Mesh = object
 
 import demo  # noqa: E402
 
+# --- compat shims for loading the 2021-era vocaset.pth on modern torch ---
+# (1) demo.py calls torch.load without map_location; the checkpoint holds
+#     CUDA tensors, which CPU-only machines refuse to deserialize.
+_device = "cuda" if torch.cuda.is_available() else "cpu"
+_orig_load = torch.load
+def _load_cpu_ok(*a, **k):
+    k.setdefault("map_location", _device)
+    return _orig_load(*a, **k)
+torch.load = _load_cpu_ok
+
+# (2) the checkpoint stores weight-norm params under the old names
+#     (...pos_conv_embed.conv.weight_g/weight_v); modern transformers
+#     parametrizes them as ...parametrizations.weight.original0/1.
+#     Adaptively rename only keys the target model doesn't recognize.
+_orig_lsd = torch.nn.Module.load_state_dict
+def _lsd_renaming(self, sd, *a, **k):
+    want = set(self.state_dict().keys())
+    fixed = {}
+    for key, val in sd.items():
+        if key not in want:
+            key = (key
+                   .replace("pos_conv_embed.conv.weight_g",
+                            "pos_conv_embed.conv.parametrizations.weight.original0")
+                   .replace("pos_conv_embed.conv.weight_v",
+                            "pos_conv_embed.conv.parametrizations.weight.original1"))
+        fixed[key] = val
+    return _orig_lsd(self, fixed, *a, **k)
+torch.nn.Module.load_state_dict = _lsd_renaming
+# --------------------------------------------------------------------------
+
 wav = sys.argv[1]
 test_name = os.path.splitext(os.path.basename(wav))[0]
 a = argparse.Namespace(
