@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>T H E · E N D · H E A D</title>
+<style>
+  :root{
+    --grid-green:#00ff66;
+    --deep:#020803;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;overflow:hidden;background:var(--deep);}
+  body{font-family:"Courier New",monospace;}
+
+  #rain{position:fixed;inset:0;z-index:0;opacity:.28;}
+  #scene{position:fixed;inset:0;z-index:1;}
+
+  .vignette{
+    position:fixed;inset:0;z-index:2;pointer-events:none;
+    background:radial-gradient(ellipse at center,
+      transparent 40%, rgba(0,8,2,.55) 78%, rgba(0,4,1,.92) 100%);
+  }
+  .scanlines{
+    position:fixed;inset:0;z-index:3;pointer-events:none;opacity:.18;
+    background:repeating-linear-gradient(0deg,
+      rgba(0,0,0,.35) 0 1px, transparent 1px 3px);
+  }
+
+  header{
+    position:fixed;top:28px;left:0;right:0;z-index:4;
+    text-align:center;pointer-events:none;
+  }
+  header h1{
+    color:var(--grid-green);
+    font-size:clamp(14px,2.2vw,22px);
+    letter-spacing:.9em;text-indent:.9em;
+    font-weight:400;
+    text-shadow:0 0 8px rgba(0,255,102,.8),0 0 28px rgba(0,255,102,.35);
+    animation:flicker 6s infinite;
+  }
+  @keyframes flicker{
+    0%,100%{opacity:1}
+    92%{opacity:1}
+    93%{opacity:.45}
+    94%{opacity:1}
+    97%{opacity:.7}
+    98%{opacity:1}
+  }
+  footer{
+    position:fixed;bottom:26px;left:0;right:0;z-index:4;
+    text-align:center;pointer-events:none;
+  }
+  footer p{
+    color:rgba(0,255,102,.45);
+    font-size:11px;letter-spacing:.35em;text-indent:.35em;
+  }
+</style>
+</head>
+<body>
+<canvas id="rain"></canvas>
+<div id="scene"></div>
+<div class="vignette"></div>
+<div class="scanlines"></div>
+<header><h1>THE END</h1></header>
+<footer><p>MOVE THE CURSOR — IT WATCHES</p></footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ============================================================
+   1. MATRIX RAIN BACKDROP (2D canvas, dim, behind everything)
+   ============================================================ */
+const rainCv = document.getElementById('rain');
+const rctx = rainCv.getContext('2d');
+let cols, drops;
+const GLYPHS = 'アカサタナハマヤラワ0123456789ｱｲｳｴｵ<>=/*+';
+function sizeRain(){
+  rainCv.width = innerWidth; rainCv.height = innerHeight;
+  cols = Math.floor(innerWidth/16);
+  drops = Array.from({length:cols},()=>Math.random()*innerHeight/16);
+}
+sizeRain();
+setInterval(()=>{
+  rctx.fillStyle='rgba(2,8,3,0.12)';
+  rctx.fillRect(0,0,rainCv.width,rainCv.height);
+  rctx.font='14px monospace';
+  for(let i=0;i<cols;i++){
+    const ch = GLYPHS[Math.floor(Math.random()*GLYPHS.length)];
+    rctx.fillStyle = Math.random()>.97 ? '#aaffcc' : '#00cc55';
+    rctx.fillText(ch, i*16, drops[i]*16);
+    drops[i] = (drops[i]*16 > rainCv.height && Math.random()>.975) ? 0 : drops[i]+1;
+  }
+},66);
+
+/* ============================================================
+   2. ANIMATED CIRCUIT-GRID TEXTURE  (the green LED skin)
+   ============================================================ */
+const TEX = 1024, CELL = 14, GAP = 3;
+const texCv = document.createElement('canvas');
+texCv.width = texCv.height = TEX;
+const tctx = texCv.getContext('2d');
+const nCells = Math.floor(TEX/CELL);
+// per-cell base brightness — vertical bands like the album cover circuitry
+const cellBase = [];
+for(let y=0;y<nCells;y++){
+  cellBase[y]=[];
+  for(let x=0;x<nCells;x++){
+    const band = Math.sin(x*0.55)*0.5+0.5;           // column striping
+    const noise = Math.random();
+    let b = 0.18 + band*0.35 + noise*0.45;
+    if(Math.random()<0.06) b = 1.2;                  // hot pixels
+    if(Math.random()<0.08) b = 0.05;                 // dead pixels
+    cellBase[y][x]=b;
+  }
+}
+function paintGrid(t){
+  tctx.fillStyle='#000400';
+  tctx.fillRect(0,0,TEX,TEX);
+  for(let y=0;y<nCells;y++){
+    for(let x=0;x<nCells;x++){
+      // slow pulse sweeping upward + per-cell flicker
+      const pulse = Math.sin(t*0.0012 + y*0.35)*0.18;
+      const flick = (Math.random()<0.015)? (Math.random()*0.8-0.3) : 0;
+      let b = Math.min(1.4, Math.max(0.02, cellBase[y][x] + pulse + flick));
+      const g = Math.floor(120 + 135*Math.min(1,b));
+      const r = Math.floor(20*b);
+      const bl = Math.floor(70*Math.min(1,b));
+      tctx.fillStyle = `rgba(${r},${g},${bl},${Math.min(1,b)})`;
+      // mix of squares and short rectangles -> circuit feel
+      const wide = ((x*7+y*13)%9===0);
+      tctx.fillRect(x*CELL+GAP, y*CELL+GAP,
+                    CELL-GAP*2 + (wide?CELL*0.6:0), CELL-GAP*2);
+    }
+  }
+}
+paintGrid(0);
+const gridTex = new THREE.CanvasTexture(texCv);
+gridTex.wrapS = gridTex.wrapT = THREE.RepeatWrapping;
+gridTex.repeat.set(3,2);
+
+/* ============================================================
+   3. THREE.JS SCENE
+   ============================================================ */
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+document.getElementById('scene').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x020803, 0.12);
+
+const camera = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, .1, 100);
+camera.position.set(0, 0.1, 4.6);
+
+/* lights — dim, green-biased, with a rim from behind */
+scene.add(new THREE.AmbientLight(0x062b12, 1.4));
+const key = new THREE.DirectionalLight(0x33ff88, 0.9);
+key.position.set(1.5, 2, 3);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x00ff66, 1.6);
+rim.position.set(-2, 1, -3);
+scene.add(rim);
+const eyeGlowLight = new THREE.PointLight(0x00ff66, 0.7, 6);
+eyeGlowLight.position.set(0, 0.2, 2);
+scene.add(eyeGlowLight);
+
+/* ---------- THE HEAD ---------- */
+const headGroup = new THREE.Group();
+scene.add(headGroup);
+
+/* skull: sphere sculpted into a stylized head */
+const skullGeo = new THREE.SphereGeometry(1, 96, 96);
+{
+  const pos = skullGeo.attributes.position;
+  const v = new THREE.Vector3();
+  for(let i=0;i<pos.count;i++){
+    v.fromBufferAttribute(pos,i);
+    // jaw taper below y=-0.25
+    if(v.y < -0.25){
+      const t = Math.min(1, (-v.y - 0.25)/0.75);
+      const taper = 1 - 0.42*t*t;
+      v.x *= taper;
+      v.z *= taper + (v.z>0 ? 0.10*t : 0);   // keep a slight chin in front
+    }
+    // flatten the back of the skull a touch
+    if(v.z < 0) v.z *= 0.93;
+    // cheek hollows
+    if(Math.abs(v.x)>0.55 && v.y>-0.35 && v.y<0.1 && v.z>0.2){
+      v.multiplyScalar(0.97);
+    }
+    // brow ridge: slight push forward above the eyes
+    if(v.y>0.18 && v.y<0.42 && v.z>0.55){
+      v.z *= 1.035;
+    }
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  skullGeo.computeVertexNormals();
+}
+const skullMat = new THREE.MeshPhongMaterial({
+  color: 0x021006,
+  emissive: 0x00ff66,
+  emissiveMap: gridTex,
+  emissiveIntensity: 0.95,
+  specular: 0x113322,
+  shininess: 18,
+});
+const skull = new THREE.Mesh(skullGeo, skullMat);
+skull.scale.set(0.82, 1.06, 0.9);
+headGroup.add(skull);
+
+/* faint wireframe shell — circuitry contour lines */
+const shell = new THREE.Mesh(
+  new THREE.SphereGeometry(1.012, 28, 28),
+  new THREE.MeshBasicMaterial({
+    color:0x00ff66, wireframe:true, transparent:true, opacity:0.06
+  })
+);
+shell.scale.copy(skull.scale);
+headGroup.add(shell);
+
+/* hollow eyes: black voids sunk into the face */
+function makeEye(x){
+  const eye = new THREE.Group();
+  const socket = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 32, 32),
+    new THREE.MeshBasicMaterial({color:0x000000})
+  );
+  socket.scale.set(0.165, 0.225, 0.13);
+  eye.add(socket);
+  // faint glowing rim around the void
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.95, 1.18, 48),
+    new THREE.MeshBasicMaterial({
+      color:0x00ff88, transparent:true, opacity:0.35,
+      side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false
+    })
+  );
+  ring.scale.set(0.175, 0.235, 1);
+  ring.position.z = 0.10;
+  eye.add(ring);
+  eye.position.set(x, 0.16, 0.70);
+  eye.rotation.y = x*0.35;       // angle sockets with the face curve
+  return eye;
+}
+headGroup.add(makeEye(-0.30));
+headGroup.add(makeEye( 0.30));
+
+/* subtle mouth slit */
+const mouth = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 24, 24),
+  new THREE.MeshBasicMaterial({color:0x000300})
+);
+mouth.scale.set(0.20, 0.030, 0.07);
+mouth.position.set(0, -0.46, 0.74);
+headGroup.add(mouth);
+
+/* halo glow sprite behind the head */
+const haloCv = document.createElement('canvas');
+haloCv.width = haloCv.height = 256;
+const hctx = haloCv.getContext('2d');
+const grad = hctx.createRadialGradient(128,128,10,128,128,128);
+grad.addColorStop(0,'rgba(0,255,102,0.55)');
+grad.addColorStop(0.5,'rgba(0,255,102,0.12)');
+grad.addColorStop(1,'rgba(0,255,102,0)');
+hctx.fillStyle = grad;
+hctx.fillRect(0,0,256,256);
+const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+  map:new THREE.CanvasTexture(haloCv),
+  blending:THREE.AdditiveBlending, depthWrite:false, opacity:0.85
+}));
+halo.scale.set(4.4,4.4,1);
+halo.position.z = -0.6;
+scene.add(halo);
+
+/* drifting green motes */
+const moteGeo = new THREE.BufferGeometry();
+const N = 160, mp = new Float32Array(N*3);
+for(let i=0;i<N;i++){
+  mp[i*3]   = (Math.random()-0.5)*8;
+  mp[i*3+1] = (Math.random()-0.5)*5;
+  mp[i*3+2] = (Math.random()-0.5)*4 - 1;
+}
+moteGeo.setAttribute('position', new THREE.BufferAttribute(mp,3));
+const motes = new THREE.Points(moteGeo, new THREE.PointsMaterial({
+  color:0x00ff66, size:0.02, transparent:true, opacity:0.5,
+  blending:THREE.AdditiveBlending, depthWrite:false
+}));
+scene.add(motes);
+
+/* ============================================================
+   4. CONSTRAINED HEAD MOTION
+   ------------------------------------------------------------
+   yaw   : ±1.0 rad  (~57°) — glancing past your shoulder, never further
+   pitch : -0.12 rad (slight up) … +0.50 rad (~29°, eyes-on-notepad)
+   ============================================================ */
+const YAW_MAX = 1.0;
+const PITCH_UP = -0.12, PITCH_DOWN = 0.50;
+const clamp = (v,a,b)=>Math.min(b,Math.max(a,v));
+
+let targetYaw = 0, targetPitch = 0;
+let lastMouseMove = -1e9;
+
+addEventListener('mousemove', e=>{
+  const nx = (e.clientX/innerWidth )*2 - 1;
+  const ny = (e.clientY/innerHeight)*2 - 1;
+  targetYaw   = clamp(nx*YAW_MAX, -YAW_MAX, YAW_MAX);
+  targetPitch = clamp(ny>0 ? ny*PITCH_DOWN : ny*-PITCH_UP, PITCH_UP, PITCH_DOWN);
+  lastMouseMove = performance.now();
+});
+addEventListener('touchmove', e=>{
+  const t = e.touches[0];
+  const nx = (t.clientX/innerWidth )*2 - 1;
+  const ny = (t.clientY/innerHeight)*2 - 1;
+  targetYaw   = clamp(nx*YAW_MAX, -YAW_MAX, YAW_MAX);
+  targetPitch = clamp(ny>0 ? ny*PITCH_DOWN : ny*-PITCH_UP, PITCH_UP, PITCH_DOWN);
+  lastMouseMove = performance.now();
+},{passive:true});
+
+/* autonomous idle behaviour: glances over each shoulder,
+   periodically dips down as if consulting notes */
+let idleSeed = Math.random()*100;
+function idleTargets(t){
+  const s = t*0.001 + idleSeed;
+  // slow wandering gaze
+  let yaw = Math.sin(s*0.31)*0.55 + Math.sin(s*0.13+2)*0.35;
+  // mostly level, with a recurring "check the notepad" dip
+  const dipPhase = (Math.sin(s*0.09) + Math.sin(s*0.23+1.3))*0.5;
+  let pitch = 0.06 + Math.max(0, dipPhase)*0.42;
+  // while reading the notes, the gaze steadies and narrows
+  if(pitch > 0.3) yaw *= 0.35;
+  return [clamp(yaw,-YAW_MAX,YAW_MAX), clamp(pitch,PITCH_UP,PITCH_DOWN)];
+}
+
+/* ============================================================
+   5. LOOP
+   ============================================================ */
+let texTick = 0;
+function animate(t){
+  requestAnimationFrame(animate);
+
+  // refresh the LED-skin a few times a second
+  if(t - texTick > 90){ paintGrid(t); gridTex.needsUpdate = true; texTick = t; }
+
+  // idle takes over 2.5s after the cursor goes quiet
+  if(t - lastMouseMove > 2500){
+    const [iy, ip] = idleTargets(t);
+    targetYaw = iy; targetPitch = ip;
+  }
+
+  // smooth pursuit + a breath of life
+  headGroup.rotation.y += (targetYaw  - headGroup.rotation.y)*0.045;
+  headGroup.rotation.x += (targetPitch- headGroup.rotation.x)*0.045;
+  headGroup.rotation.z = Math.sin(t*0.0007)*0.02;
+  headGroup.position.y = Math.sin(t*0.0011)*0.04;
+
+  // hard safety clamp — the neck physically cannot go further
+  headGroup.rotation.y = clamp(headGroup.rotation.y, -YAW_MAX, YAW_MAX);
+  headGroup.rotation.x = clamp(headGroup.rotation.x, PITCH_UP, PITCH_DOWN);
+
+  // ambient drift
+  motes.rotation.y = t*0.00004;
+  halo.material.opacity = 0.75 + Math.sin(t*0.002)*0.1;
+
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  sizeRain();
+});
+</script>
+</body>
+</html>
