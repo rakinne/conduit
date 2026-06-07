@@ -1,0 +1,25 @@
+# FaceFormer inference-only requirements, relaxed for Python 3.10.
+# The upstream requirements.txt pins 2021-era versions (scipy==1.7.1,
+# torch==1.9.0, transformers==4.6.1) that have no wheels for Python
+# 3.11/3.12 — that is the "No matching distribution" error.
+#
+# This set installs on Python 3.10 and is enough to PREDICT vertices
+# (model + wav2vec2 + audio loading). It deliberately omits the
+# rendering stack (pyrender/trimesh/opencv) — you don't need FaceFormer
+# to render; conduit's bake_anim.py + the browser do that. See notes.
+#
+#   conda create -n faceformer python=3.10 -y
+#   conda activate faceformer
+#   pip install -r requirements-faceformer-py310.txt
+#
+# 'pickle' is a stdlib module and must NOT be installed from pip
+# (the upstream file lists it by mistake; pip will error or pull a
+# malicious squatter). It is intentionally absent here.
+
+numpy<2                 # transformers 4.x + old torch predate the numpy 2 ABI
+scipy
+librosa==0.9.2          # 0.8.1 won't build on 3.10; 0.9.2 keeps the old API demo.py uses
+tqdm
+torch==2.2.2            # CPU build is fine for short clips
+torchaudio==2.2.2
+transformers==4.30.2    # new enough for 3.10 wheels, old enough for FaceFormer's wav2vec2 usage

@@ -54,6 +54,72 @@ To regenerate: download FLAME 2023 Open from https://flame.is.tue.mpg.de
 (CC-BY-4.0), place the pkl at `assets/flame2023_Open.pkl` (gitignored),
 then `python3 tools/convert_flame.py assets/flame2023_Open.pkl`.
 
+## Speech-driven animation (Phase 6)
+
+The page has an optional speech mode: if `anim_data.js` is present, the
+status line gains `[SPACE] SPEAKS` and spacebar plays per-frame vertex
+motion (one dynamic morph slot at influence 1, composing with the identity
+and chaos morphs) in sync with an optional audio file.
+
+Producing `anim_data.js` (on a machine with internet + PyTorch):
+1. `git clone https://github.com/EvelynFan/FaceFormer` and install its
+   requirements (PyTorch, transformers, librosa — the wav2vec2 audio
+   encoder auto-downloads from the Hugging Face Hub on first run)
+2. Obtain `vocaset.pth` pretrained weights (README links; they have
+   rotted before — see FaceFormer issue #93 for author-provided mirrors)
+   and `FLAME_sample.ply` from the VOCA repo as the template
+3. Run the vocaset demo command from FaceFormer's README on your .wav —
+   it emits a `(T, 15069)` .npy of FLAME-topology vertex frames at 30fps
+4. `python3 tools/bake_anim.py prediction.npy --fps 30 --wav speech.wav`
+   in this repo — it remaps frames through `origIdx`, applies the scene
+   transform from `head_data.js`, quantizes to int16, and writes
+   `anim_data.js` (serve gzipped; it compresses ~4x)
+5. Put your .wav next to `index.html`, reload, press SPACE
+
+### On-the-fly speech (UPLINK)
+
+`tools/speak_server.py` turns the manual pipeline into a one-keystroke loop.
+Run it on your machine inside the faceformer env:
+
+    source .venv-faceformer/bin/activate   # or: conda activate faceformer
+    python3 tools/speak_server.py --faceformer ~/Downloads/FaceFormer-main
+
+It loads the model once, then serves localhost:8765. When conduit's page
+detects it, an UPLINK input bar appears — type text, hit TRANSMIT, and the
+head speaks it with generated voice (macOS `say`) and FaceFormer lips.
+`--mock` runs without torch/model for plumbing tests. Limits: 20 s of
+speech per request (FaceFormer's positional encoding caps at 600 frames);
+expect inference to take roughly real-time-or-slower on CPU. The uplink
+only works from pages served over http/file (an https page can't call
+http://localhost — mixed content).
+
+`bake_anim.js` output is sparse: verts whose peak motion is below
+`--min-move` (default 0.3 mm — invisible at typical view size) are dropped,
+which cuts file size ~40% with 99.7% of motion energy retained. A baked
+demo clip (`anim_data.js`, FaceFormer on its bundled `demo/wav/test.wav`)
+is committed so the repo lip-syncs out of the box; drop the matching
+`test.wav` next to `index.html` for audio (not committed — it's FaceFormer's
+asset).
+
+Any VOCASET-trained vertex-output model works the same way (CodeTalker,
+etc.) — the only contract is FLAME topology, `(T, 5023, 3)`.
+
+### Environment gotcha (Python 3.12)
+
+FaceFormer's `requirements.txt` pins 2021-era versions (`scipy==1.7.1`,
+`torch==1.9.0`, `transformers==4.6.1`) with no wheels for Python 3.11/3.12
+— that's the `No matching distribution found for scipy==1.7.1` error.
+Don't force nearest versions; use a Python 3.10 env instead. Two helpers
+in `tools/` automate it:
+
+- `requirements-faceformer-py310.txt` — relaxed, 3.10-compatible, inference
+  only (drops the pyrender/trimesh/opencv render stack you don't need, and
+  the stray `pickle` line which is stdlib). Copy it into your FaceFormer clone.
+- `run_faceformer.sh` — creates the conda env, installs the above, applies a
+  one-line patch to `wav2vec.py` (modern `transformers` returns a tuple from
+  `feature_projection`), and runs prediction CPU-only, skipping rendering.
+  `bash run_faceformer.sh demo/wav/your.wav` → `demo/result/your.npy`.
+
 **Attribution:** head geometry derived from FLAME — T. Li, T. Bolkart,
 M. J. Black, H. Li, J. Romero, *Learning a model of facial shape and
 expression from 4D scans*, ACM TOG (Proc. SIGGRAPH Asia), 2017.

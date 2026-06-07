@@ -121,25 +121,28 @@ def solve_identities(v_template, shapedirs, head_mask):
     return out
 
 # ----------------------------------------------------------------- UVs
-def cylindrical_uv_with_seam_fix(verts, faces, deltas):
+def cylindrical_uv_with_seam_fix(verts, faces, deltas, orig):
     """Cylindrical unwrap around Y. Triangles crossing the u-seam get
     duplicated vertices so the texture doesn't smear across the back.
-    deltas: list of (n,3) arrays that must be duplicated consistently."""
+    deltas: list of (n,3) arrays duplicated consistently.
+    orig: (n,) original-FLAME vertex index per vertex, kept in sync."""
     x, y, z = verts[:, 0], verts[:, 1], verts[:, 2]
     u = np.arctan2(x, z) / (2 * np.pi) + 0.5          # seam at back (z<0,x~0)
     v = (y - y.min()) / (y.max() - y.min())
     verts = verts.copy(); faces = faces.copy()
     u = u.copy(); v = v.copy()
     deltas = [d.copy() for d in deltas]
+    orig = orig.copy()
     dup_cache = {}
     def dup(idx, shift):
         key = (idx, shift)
         if key in dup_cache:
             return dup_cache[key]
-        nonlocal verts, u, v, deltas
+        nonlocal verts, u, v, deltas, orig
         verts = np.vstack([verts, verts[idx][None]])
         u = np.append(u, u[idx] + shift)
         v = np.append(v, v[idx])
+        orig = np.append(orig, orig[idx])
         for i in range(len(deltas)):
             deltas[i] = np.vstack([deltas[i], deltas[i][idx][None]])
         dup_cache[key] = len(verts) - 1
@@ -150,7 +153,7 @@ def cylindrical_uv_with_seam_fix(verts, faces, deltas):
             for c in range(3):
                 if u[tri[c]] < 0.5:
                     faces[fi, c] = dup(tri[c], 1.0) # unwrap past 1.0
-    return verts, faces, u, v, deltas
+    return verts, faces, u, v, deltas, orig
 
 # ---------------------------------------------------------------- main
 def main(pkl_path):
@@ -242,8 +245,9 @@ def main(pkl_path):
     all_deltas = target_deltas + [chaos(1.3), chaos(7.8)]
 
     # ---- UVs with seam duplication (applies to all delta sets) -----
-    verts_f, faces_f, u, v, all_deltas = cylindrical_uv_with_seam_fix(
-        base_n, faces_h, all_deltas)
+    orig_idx = np.where(keep)[0]                 # original FLAME index per vert
+    verts_f, faces_f, u, v, all_deltas, orig_idx = cylindrical_uv_with_seam_fix(
+        base_n, faces_h, all_deltas, orig_idx)
     print(f"after seam fix: {len(verts_f)} verts "
           f"(+{len(verts_f)-len(base_n)} duplicated)")
     assert len(verts_f) < 65536, "indices must fit Uint16"
@@ -258,6 +262,9 @@ def main(pkl_path):
         'uv': b64(np.stack([u, v], 1).ravel(), np.float32),
         'idx': b64(faces_f.ravel(), np.uint16),
         'targets': [b64(d.ravel(), np.float32) for d in all_deltas],
+        'origIdx': b64(orig_idx, np.uint16),
+        'xform': {'center': center.round(6).tolist(),
+                  'scale': round(float(scale), 6)},
         'rigs': rigs_json,
         'meta': {'source': 'FLAME 2023 Open (CC-BY-4.0), Li et al. 2017',
                  'identities': [n for n, _ in identities],
