@@ -52,9 +52,16 @@
     text-align:center;pointer-events:none;
   }
   footer p{
-    color:rgba(0,255,102,.45);
+    color:rgba(0,255,102,.55);
     font-size:11px;letter-spacing:.35em;text-indent:.35em;
+    min-height:14px;
   }
+  footer p.resequencing{
+    color:#aaffcc;
+    text-shadow:0 0 10px rgba(0,255,102,.9);
+    animation:statblink .12s infinite;
+  }
+  @keyframes statblink{50%{opacity:.4}}
 </style>
 </head>
 <body>
@@ -63,12 +70,12 @@
 <div class="vignette"></div>
 <div class="scanlines"></div>
 <header><h1>THE END</h1></header>
-<footer><p>MOVE THE CURSOR — IT WATCHES</p></footer>
+<footer><p id="status">FORM 01 · STABLE — MOVE THE CURSOR, IT WATCHES</p></footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 /* ============================================================
-   1. MATRIX RAIN BACKDROP (2D canvas, dim, behind everything)
+   1. MATRIX RAIN BACKDROP
    ============================================================ */
 const rainCv = document.getElementById('rain');
 const rctx = rainCv.getContext('2d');
@@ -93,43 +100,52 @@ setInterval(()=>{
 },66);
 
 /* ============================================================
-   2. ANIMATED CIRCUIT-GRID TEXTURE  (the green LED skin)
+   2. ANIMATED CIRCUIT-GRID TEXTURE (with glitch tearing)
    ============================================================ */
 const TEX = 1024, CELL = 14, GAP = 3;
 const texCv = document.createElement('canvas');
 texCv.width = texCv.height = TEX;
 const tctx = texCv.getContext('2d');
 const nCells = Math.floor(TEX/CELL);
-// per-cell base brightness — vertical bands like the album cover circuitry
 const cellBase = [];
 for(let y=0;y<nCells;y++){
   cellBase[y]=[];
   for(let x=0;x<nCells;x++){
-    const band = Math.sin(x*0.55)*0.5+0.5;           // column striping
+    const band = Math.sin(x*0.55)*0.5+0.5;
     const noise = Math.random();
     let b = 0.18 + band*0.35 + noise*0.45;
-    if(Math.random()<0.06) b = 1.2;                  // hot pixels
-    if(Math.random()<0.08) b = 0.05;                 // dead pixels
+    if(Math.random()<0.06) b = 1.2;
+    if(Math.random()<0.08) b = 0.05;
     cellBase[y][x]=b;
   }
 }
+let glitchLevel = 0;   // 0..1, spiked during morphs
 function paintGrid(t){
   tctx.fillStyle='#000400';
   tctx.fillRect(0,0,TEX,TEX);
+  const flickP = 0.015 + glitchLevel*0.18;
   for(let y=0;y<nCells;y++){
     for(let x=0;x<nCells;x++){
-      // slow pulse sweeping upward + per-cell flicker
       const pulse = Math.sin(t*0.0012 + y*0.35)*0.18;
-      const flick = (Math.random()<0.015)? (Math.random()*0.8-0.3) : 0;
+      const flick = (Math.random()<flickP)? (Math.random()*0.9-0.35) : 0;
       let b = Math.min(1.4, Math.max(0.02, cellBase[y][x] + pulse + flick));
       const g = Math.floor(120 + 135*Math.min(1,b));
       const r = Math.floor(20*b);
       const bl = Math.floor(70*Math.min(1,b));
       tctx.fillStyle = `rgba(${r},${g},${bl},${Math.min(1,b)})`;
-      // mix of squares and short rectangles -> circuit feel
       const wide = ((x*7+y*13)%9===0);
       tctx.fillRect(x*CELL+GAP, y*CELL+GAP,
                     CELL-GAP*2 + (wide?CELL*0.6:0), CELL-GAP*2);
+    }
+  }
+  // glitch: horizontal row tears, like signal interference
+  if(glitchLevel > 0.05){
+    const tears = Math.floor(glitchLevel*9);
+    for(let i=0;i<tears;i++){
+      const y = Math.random()*TEX;
+      const h = 6 + Math.random()*26;
+      const shift = (Math.random()-0.5)*120*glitchLevel;
+      tctx.drawImage(texCv, 0,y,TEX,h, shift,y,TEX,h);
     }
   }
 }
@@ -139,7 +155,7 @@ gridTex.wrapS = gridTex.wrapT = THREE.RepeatWrapping;
 gridTex.repeat.set(3,2);
 
 /* ============================================================
-   3. THREE.JS SCENE
+   3. SCENE
    ============================================================ */
 const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
 renderer.setSize(innerWidth, innerHeight);
@@ -152,7 +168,6 @@ scene.fog = new THREE.FogExp2(0x020803, 0.12);
 const camera = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, .1, 100);
 camera.position.set(0, 0.1, 4.6);
 
-/* lights — dim, green-biased, with a rim from behind */
 scene.add(new THREE.AmbientLight(0x062b12, 1.4));
 const key = new THREE.DirectionalLight(0x33ff88, 0.9);
 key.position.set(1.5, 2, 3);
@@ -164,38 +179,121 @@ const eyeGlowLight = new THREE.PointLight(0x00ff66, 0.7, 6);
 eyeGlowLight.position.set(0, 0.2, 2);
 scene.add(eyeGlowLight);
 
-/* ---------- THE HEAD ---------- */
+/* ============================================================
+   4. IDENTITY SCULPTOR
+   ------------------------------------------------------------
+   Each identity is a parameter set; sculpt() maps a unit-sphere
+   vertex to that identity's skull. Same topology for every face
+   = perfect morph targets.
+   ============================================================ */
+const gauss  = (v,c,s)=>Math.exp(-((v-c)*(v-c))/(2*s*s));
+const sstep  = (v,a,b)=>{ const t=Math.min(1,Math.max(0,(v-a)/(b-a))); return t*t*(3-2*t); };
+const lerp   = (a,b,t)=>a+(b-a)*t;
+
+function sculpt(x,y,z,p){
+  let vx=x, vy=y*p.elong, vz=z;
+  if(vz<0) vz *= p.skullBack;                                   // skull profile
+  const tFall = gauss(vy,0.45,0.25)*sstep(Math.abs(vx),0.3,0.9);
+  vx *= 1 - p.temple*tFall;                                     // temples
+  if(vz>0) vz *= 1 + (p.brow-1)*gauss(vy,0.30,0.10)*sstep(vz,0.4,0.9); // brow ridge
+  const cFall = gauss(vy,p.cheekY,0.16)*sstep(Math.abs(vx),0.35,0.75)*sstep(vz,0.1,0.5);
+  const cs = 1 + p.cheek*cFall;                                 // cheeks / cheekbones
+  vx*=cs; if(vz>0) vz*=cs;
+  if(vy<-0.22){                                                 // jaw + chin
+    const t = Math.min(1,(-vy-0.22)/0.78);
+    const taper = 1 - p.jawTaper*t*t;
+    vx *= taper*p.jawWidth;
+    vz *= taper;
+    if(vz>0) vz += p.chinF*t*t;
+  }
+  const nf = gauss(vy,p.noseY,0.13)*gauss(vx,0,p.noseW)*sstep(vz,0.72,0.96);
+  vz += p.noseL*nf*2.2;                                         // nose
+  const lf = gauss(vy,-0.45,0.07)*gauss(vx,0,0.14)*sstep(vz,0.55,0.88);
+  vz += p.lip*lf*2.0;                                           // lips
+  return [vx,vy,vz];
+}
+
+/* five distinct skulls + facial rig (eye/mouth placement) */
+const IDENTITIES = [
+ { name:'01 · MONOLITH',
+   p:{temple:.02, brow:1.07, cheek:.06,  cheekY:-.02, jawTaper:.30, jawWidth:1.08,
+      chinF:.05, noseL:.09, noseW:.20, noseY:-.05, lip:.06, skullBack:.95, elong:.98},
+   rig:{eyeX:.33, eyeY:.17, eyeSX:.170, eyeSY:.210, tilt: .00, mouthW:.24, mouthY:-.45} },
+ { name:'02 · BLADE',
+   p:{temple:.14, brow:1.04, cheek:.10,  cheekY:.12,  jawTaper:.55, jawWidth:.86,
+      chinF:.12, noseL:.16, noseW:.11, noseY:-.04, lip:.02, skullBack:.90, elong:1.06},
+   rig:{eyeX:.29, eyeY:.18, eyeSX:.150, eyeSY:.255, tilt: .12, mouthW:.18, mouthY:-.47} },
+ { name:'03 · ORB',
+   p:{temple:.00, brow:1.00, cheek:.14,  cheekY:-.08, jawTaper:.28, jawWidth:1.02,
+      chinF:.02, noseL:.07, noseW:.15, noseY:-.08, lip:.05, skullBack:.97, elong:.95},
+   rig:{eyeX:.31, eyeY:.15, eyeSX:.190, eyeSY:.190, tilt:-.05, mouthW:.22, mouthY:-.44} },
+ { name:'04 · WRAITH',
+   p:{temple:.10, brow:1.09, cheek:-.12, cheekY:-.02, jawTaper:.60, jawWidth:.82,
+      chinF:.10, noseL:.14, noseW:.10, noseY:-.02, lip:.00, skullBack:.88, elong:1.08},
+   rig:{eyeX:.27, eyeY:.19, eyeSX:.150, eyeSY:.270, tilt: .18, mouthW:.15, mouthY:-.48} },
+ { name:'05 · TITAN',
+   p:{temple:.04, brow:1.12, cheek:.08,  cheekY:.04,  jawTaper:.36, jawWidth:1.12,
+      chinF:.08, noseL:.12, noseW:.22, noseY:-.07, lip:.08, skullBack:.96, elong:1.02},
+   rig:{eyeX:.34, eyeY:.16, eyeSX:.180, eyeSY:.200, tilt:-.08, mouthW:.26, mouthY:-.46} },
+];
+/* neutral base the morph shader blends away from */
+const NEUTRAL = {temple:.05, brow:1.03, cheek:.02, cheekY:-.03, jawTaper:.40, jawWidth:1.0,
+                 chinF:.06, noseL:.10, noseW:.16, noseY:-.06, lip:.03, skullBack:.93, elong:1.0};
+
+/* build a sculpted geometry with morph targets for every identity
+   + two "chaos" noise targets used mid-transition */
+function buildMorphGeometry(widthSegs, heightSegs){
+  const geo = new THREE.SphereGeometry(1, widthSegs, heightSegs);
+  const src = geo.attributes.position.array.slice();   // pristine sphere
+  const count = geo.attributes.position.count;
+
+  const sculptAll = (params)=>{
+    const out = new Float32Array(src.length);
+    for(let i=0;i<count;i++){
+      const [vx,vy,vz] = sculpt(src[i*3], src[i*3+1], src[i*3+2], params);
+      out[i*3]=vx; out[i*3+1]=vy; out[i*3+2]=vz;
+    }
+    return out;
+  };
+
+  const basePos = sculptAll(NEUTRAL);
+  geo.attributes.position.array.set(basePos);
+  geo.attributes.position.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  const targets = IDENTITIES.map(id =>
+    new THREE.Float32BufferAttribute(sculptAll(id.p), 3));
+
+  /* chaos fields: smeary, x-biased noise added over the neutral skull */
+  const chaos = (seed)=>{
+    const out = new Float32Array(src.length);
+    for(let i=0;i<count;i++){
+      const x=src[i*3], y=src[i*3+1], z=src[i*3+2];
+      const n1 = Math.sin(x*9+seed)*Math.cos(y*7+seed*1.7)*Math.sin(z*8+x*3);
+      const dx = Math.sin(y*11+seed)*0.10 + n1*0.06;       // horizontal smear bias
+      const dy = n1*0.045;
+      const dz = Math.cos(x*8+seed*2)*0.06*Math.max(0,z);  // boil the face, not the skull back
+      out[i*3]  = basePos[i*3]  + dx;
+      out[i*3+1]= basePos[i*3+1]+ dy;
+      out[i*3+2]= basePos[i*3+2]+ dz;
+    }
+    return new THREE.Float32BufferAttribute(out, 3);
+  };
+  targets.push(chaos(1.3), chaos(7.8));   // indices 5, 6
+
+  geo.morphAttributes.position = targets;
+  return geo;
+}
+const CHAOS_A = IDENTITIES.length;      // 5
+const CHAOS_B = IDENTITIES.length + 1;  // 6
+
+/* ============================================================
+   5. THE HEAD
+   ============================================================ */
 const headGroup = new THREE.Group();
 scene.add(headGroup);
 
-/* skull: sphere sculpted into a stylized head */
-const skullGeo = new THREE.SphereGeometry(1, 96, 96);
-{
-  const pos = skullGeo.attributes.position;
-  const v = new THREE.Vector3();
-  for(let i=0;i<pos.count;i++){
-    v.fromBufferAttribute(pos,i);
-    // jaw taper below y=-0.25
-    if(v.y < -0.25){
-      const t = Math.min(1, (-v.y - 0.25)/0.75);
-      const taper = 1 - 0.42*t*t;
-      v.x *= taper;
-      v.z *= taper + (v.z>0 ? 0.10*t : 0);   // keep a slight chin in front
-    }
-    // flatten the back of the skull a touch
-    if(v.z < 0) v.z *= 0.93;
-    // cheek hollows
-    if(Math.abs(v.x)>0.55 && v.y>-0.35 && v.y<0.1 && v.z>0.2){
-      v.multiplyScalar(0.97);
-    }
-    // brow ridge: slight push forward above the eyes
-    if(v.y>0.18 && v.y<0.42 && v.z>0.55){
-      v.z *= 1.035;
-    }
-    pos.setXYZ(i, v.x, v.y, v.z);
-  }
-  skullGeo.computeVertexNormals();
-}
+const skullGeo = buildMorphGeometry(96, 96);
 const skullMat = new THREE.MeshPhongMaterial({
   color: 0x021006,
   emissive: 0x00ff66,
@@ -203,31 +301,28 @@ const skullMat = new THREE.MeshPhongMaterial({
   emissiveIntensity: 0.95,
   specular: 0x113322,
   shininess: 18,
+  morphTargets: true,
 });
 const skull = new THREE.Mesh(skullGeo, skullMat);
 skull.scale.set(0.82, 1.06, 0.9);
 headGroup.add(skull);
 
-/* faint wireframe shell — circuitry contour lines */
-const shell = new THREE.Mesh(
-  new THREE.SphereGeometry(1.012, 28, 28),
-  new THREE.MeshBasicMaterial({
-    color:0x00ff66, wireframe:true, transparent:true, opacity:0.06
-  })
-);
-shell.scale.copy(skull.scale);
+/* wireframe shell, same sculpt pipeline at low res so it morphs too */
+const shellGeo = buildMorphGeometry(24, 24);
+const shell = new THREE.Mesh(shellGeo, new THREE.MeshBasicMaterial({
+  color:0x00ff66, wireframe:true, transparent:true, opacity:0.06, morphTargets:true
+}));
+shell.scale.set(0.83, 1.07, 0.91);
 headGroup.add(shell);
 
-/* hollow eyes: black voids sunk into the face */
-function makeEye(x){
+/* hollow eyes + rim glow */
+function makeEye(side){
   const eye = new THREE.Group();
   const socket = new THREE.Mesh(
     new THREE.SphereGeometry(1, 32, 32),
     new THREE.MeshBasicMaterial({color:0x000000})
   );
-  socket.scale.set(0.165, 0.225, 0.13);
   eye.add(socket);
-  // faint glowing rim around the void
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.95, 1.18, 48),
     new THREE.MeshBasicMaterial({
@@ -235,26 +330,41 @@ function makeEye(x){
       side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false
     })
   );
-  ring.scale.set(0.175, 0.235, 1);
   ring.position.z = 0.10;
   eye.add(ring);
-  eye.position.set(x, 0.16, 0.70);
-  eye.rotation.y = x*0.35;       // angle sockets with the face curve
+  eye.userData = {side, socket, ring};
   return eye;
 }
-headGroup.add(makeEye(-0.30));
-headGroup.add(makeEye( 0.30));
+const eyeL = makeEye(-1), eyeR = makeEye(1);
+headGroup.add(eyeL, eyeR);
 
-/* subtle mouth slit */
 const mouth = new THREE.Mesh(
   new THREE.SphereGeometry(1, 24, 24),
   new THREE.MeshBasicMaterial({color:0x000300})
 );
-mouth.scale.set(0.20, 0.030, 0.07);
-mouth.position.set(0, -0.46, 0.74);
 headGroup.add(mouth);
 
-/* halo glow sprite behind the head */
+/* facial rig: place eyes/mouth for a blend between two identities */
+function applyRig(a, b, t, jit){
+  const eX = lerp(a.eyeX,b.eyeX,t),  eY = lerp(a.eyeY,b.eyeY,t);
+  const sX = lerp(a.eyeSX,b.eyeSX,t), sY = lerp(a.eyeSY,b.eyeSY,t);
+  const tl = lerp(a.tilt,b.tilt,t);
+  [eyeL,eyeR].forEach(eye=>{
+    const s = eye.userData.side;
+    eye.position.set(s*eX + (Math.random()-.5)*jit*.06,
+                     eY    + (Math.random()-.5)*jit*.06, 0.70);
+    eye.rotation.y = s*0.35;
+    eye.rotation.z = -s*tl;
+    eye.userData.socket.scale.set(sX, sY, 0.13);
+    eye.userData.ring.scale.set(sX*1.06, sY*1.05, 1);
+    eye.userData.ring.material.opacity = 0.35 + (jit>0 ? (Math.random()-.5)*0.3*jit : 0);
+  });
+  mouth.scale.set(lerp(a.mouthW,b.mouthW,t), 0.030 + jit*0.02*Math.random(), 0.07);
+  mouth.position.set((Math.random()-.5)*jit*.05, lerp(a.mouthY,b.mouthY,t), 0.74);
+}
+applyRig(IDENTITIES[0].rig, IDENTITIES[0].rig, 0, 0);
+
+/* halo + motes */
 const haloCv = document.createElement('canvas');
 haloCv.width = haloCv.height = 256;
 const hctx = haloCv.getContext('2d');
@@ -272,7 +382,6 @@ halo.scale.set(4.4,4.4,1);
 halo.position.z = -0.6;
 scene.add(halo);
 
-/* drifting green motes */
 const moteGeo = new THREE.BufferGeometry();
 const N = 160, mp = new Float32Array(N*3);
 for(let i=0;i<N;i++){
@@ -288,10 +397,66 @@ const motes = new THREE.Points(moteGeo, new THREE.PointsMaterial({
 scene.add(motes);
 
 /* ============================================================
-   4. CONSTRAINED HEAD MOTION
+   6. SHAPE-SHIFT CHOREOGRAPHY
    ------------------------------------------------------------
-   yaw   : ±1.0 rad  (~57°) — glancing past your shoulder, never further
-   pitch : -0.12 rad (slight up) … +0.50 rad (~29°, eyes-on-notepad)
+   hold (5–9s) -> morph (2.6s): identity A fades into identity B
+   while two chaos noise targets spike mid-way and the LED skin
+   tears — exactly the arc in the reference frames.
+   ============================================================ */
+const MORPH_MS = 2600;
+const statusEl = document.getElementById('status');
+let curId = 0, nxtId = 0;
+let phase = 'hold', phaseStart = 0, holdDur = 5200;
+const easeInOut = u => u<.5 ? 4*u*u*u : 1-Math.pow(-2*u+2,3)/2;
+
+function setInfluences(mesh, cur, nxt, e, c1, c2){
+  const inf = mesh.morphTargetInfluences;
+  for(let i=0;i<inf.length;i++) inf[i]=0;
+  inf[cur] = 1-e;
+  inf[nxt] = e;
+  inf[CHAOS_A] = c1;
+  inf[CHAOS_B] = c2;
+}
+setInfluences(skull,0,0,0,0,0);
+setInfluences(shell,0,0,0,0,0);
+
+function updateShapeShift(t){
+  if(phase==='hold'){
+    if(t-phaseStart > holdDur){
+      phase='morph'; phaseStart=t;
+      nxtId = (curId + 1 + Math.floor(Math.random()*(IDENTITIES.length-1))) % IDENTITIES.length;
+      statusEl.textContent = `RESEQUENCING → FORM ${IDENTITIES[nxtId].name.slice(0,2)}`;
+      statusEl.classList.add('resequencing');
+    } else {
+      glitchLevel = Math.max(0, glitchLevel-0.05);
+      applyRig(IDENTITIES[curId].rig, IDENTITIES[curId].rig, 0, 0);
+      setInfluences(skull,curId,curId,0,0,0);
+      setInfluences(shell,curId,curId,0,0,0);
+    }
+  }
+  if(phase==='morph'){
+    const u = Math.min(1,(t-phaseStart)/MORPH_MS);
+    const e = easeInOut(u);
+    const bump = Math.sin(Math.PI*u);                 // 0 -> 1 -> 0
+    const c1 = bump*0.55*(0.5+0.5*Math.sin(t*0.021)); // two evolving
+    const c2 = bump*0.45*(0.5-0.5*Math.sin(t*0.017)); // turbulence fields
+    glitchLevel = bump;
+    setInfluences(skull,curId,nxtId,e,c1,c2);
+    setInfluences(shell,curId,nxtId,e,c1,c2);
+    applyRig(IDENTITIES[curId].rig, IDENTITIES[nxtId].rig, e, bump);
+    if(u>=1){
+      curId = nxtId; phase='hold'; phaseStart=t;
+      holdDur = 5000 + Math.random()*4000;
+      glitchLevel = 0;
+      statusEl.textContent = `FORM ${IDENTITIES[curId].name} · STABLE`;
+      statusEl.classList.remove('resequencing');
+    }
+  }
+}
+
+/* ============================================================
+   7. CONSTRAINED HEAD MOTION (unchanged limits)
+   yaw ±1.0 rad (~57°) · pitch -0.12 rad up … +0.50 rad down
    ============================================================ */
 const YAW_MAX = 1.0;
 const PITCH_UP = -0.12, PITCH_DOWN = 0.50;
@@ -300,66 +465,55 @@ const clamp = (v,a,b)=>Math.min(b,Math.max(a,v));
 let targetYaw = 0, targetPitch = 0;
 let lastMouseMove = -1e9;
 
-addEventListener('mousemove', e=>{
-  const nx = (e.clientX/innerWidth )*2 - 1;
-  const ny = (e.clientY/innerHeight)*2 - 1;
+function pointTo(cx, cy){
+  const nx = (cx/innerWidth )*2 - 1;
+  const ny = (cy/innerHeight)*2 - 1;
   targetYaw   = clamp(nx*YAW_MAX, -YAW_MAX, YAW_MAX);
   targetPitch = clamp(ny>0 ? ny*PITCH_DOWN : ny*-PITCH_UP, PITCH_UP, PITCH_DOWN);
   lastMouseMove = performance.now();
-});
-addEventListener('touchmove', e=>{
-  const t = e.touches[0];
-  const nx = (t.clientX/innerWidth )*2 - 1;
-  const ny = (t.clientY/innerHeight)*2 - 1;
-  targetYaw   = clamp(nx*YAW_MAX, -YAW_MAX, YAW_MAX);
-  targetPitch = clamp(ny>0 ? ny*PITCH_DOWN : ny*-PITCH_UP, PITCH_UP, PITCH_DOWN);
-  lastMouseMove = performance.now();
-},{passive:true});
+}
+addEventListener('mousemove', e=>pointTo(e.clientX,e.clientY));
+addEventListener('touchmove', e=>pointTo(e.touches[0].clientX,e.touches[0].clientY),{passive:true});
 
-/* autonomous idle behaviour: glances over each shoulder,
-   periodically dips down as if consulting notes */
 let idleSeed = Math.random()*100;
 function idleTargets(t){
   const s = t*0.001 + idleSeed;
-  // slow wandering gaze
   let yaw = Math.sin(s*0.31)*0.55 + Math.sin(s*0.13+2)*0.35;
-  // mostly level, with a recurring "check the notepad" dip
   const dipPhase = (Math.sin(s*0.09) + Math.sin(s*0.23+1.3))*0.5;
   let pitch = 0.06 + Math.max(0, dipPhase)*0.42;
-  // while reading the notes, the gaze steadies and narrows
   if(pitch > 0.3) yaw *= 0.35;
   return [clamp(yaw,-YAW_MAX,YAW_MAX), clamp(pitch,PITCH_UP,PITCH_DOWN)];
 }
 
 /* ============================================================
-   5. LOOP
+   8. LOOP
    ============================================================ */
 let texTick = 0;
 function animate(t){
   requestAnimationFrame(animate);
 
-  // refresh the LED-skin a few times a second
-  if(t - texTick > 90){ paintGrid(t); gridTex.needsUpdate = true; texTick = t; }
+  // glitching skin refreshes faster mid-morph
+  const texRate = glitchLevel>0.05 ? 45 : 90;
+  if(t - texTick > texRate){ paintGrid(t); gridTex.needsUpdate = true; texTick = t; }
 
-  // idle takes over 2.5s after the cursor goes quiet
+  updateShapeShift(t);
+
   if(t - lastMouseMove > 2500){
     const [iy, ip] = idleTargets(t);
     targetYaw = iy; targetPitch = ip;
   }
 
-  // smooth pursuit + a breath of life
   headGroup.rotation.y += (targetYaw  - headGroup.rotation.y)*0.045;
   headGroup.rotation.x += (targetPitch- headGroup.rotation.x)*0.045;
-  headGroup.rotation.z = Math.sin(t*0.0007)*0.02;
+  headGroup.rotation.z = Math.sin(t*0.0007)*0.02
+                       + (glitchLevel>0 ? (Math.random()-.5)*0.02*glitchLevel : 0);
   headGroup.position.y = Math.sin(t*0.0011)*0.04;
 
-  // hard safety clamp — the neck physically cannot go further
   headGroup.rotation.y = clamp(headGroup.rotation.y, -YAW_MAX, YAW_MAX);
   headGroup.rotation.x = clamp(headGroup.rotation.x, PITCH_UP, PITCH_DOWN);
 
-  // ambient drift
   motes.rotation.y = t*0.00004;
-  halo.material.opacity = 0.75 + Math.sin(t*0.002)*0.1;
+  halo.material.opacity = 0.75 + Math.sin(t*0.002)*0.1 + glitchLevel*0.15;
 
   renderer.render(scene, camera);
 }

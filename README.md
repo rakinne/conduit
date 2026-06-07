@@ -14,6 +14,12 @@ circuit-skinned face on The Black Eyed Peas' *The E.N.D.* album cover.
   - Pitch clamped from a slight upward tilt to ~29° down (consulting a notepad)
 - Autonomous idle behavior after 2.5s of inactivity: wandering glances and
   recurring "note-checking" dips
+- **Shape-shifting**: the head cycles through five procedurally sculpted
+  identities (distinct skulls, brows, noses, cheekbones, jaws, lips) using
+  Three.js morph targets. Mid-transition, two noise "chaos" morphs spike so
+  the face boils and smears before settling — synced with LED-skin row
+  tearing and flicker. Eyes and mouth re-rig per identity. A status line
+  reports the current form and announces RESEQUENCING during morphs.
 
 ## Run
 
@@ -26,4 +32,7 @@ Key constants live near the top of each section in `index.html`:
 
 - `YAW_MAX`, `PITCH_UP`, `PITCH_DOWN` — rotation limits
 - `CELL`, `GAP` — circuit-grid density
+- `IDENTITIES` — the five face parameter sets (add/edit skull params and rigs)
+- `MORPH_MS`, `holdDur` — transition speed and time between shifts
+- `chaos()` amplitudes — how violently the face boils mid-morph
 - `idleTargets()` — idle gaze choreography
