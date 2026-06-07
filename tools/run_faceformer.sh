@@ -54,13 +54,25 @@ $PIP install -r "${HERE}/requirements-faceformer-py310.txt"
 
 # 2. patch wav2vec.py: feature_projection returns a tuple in modern
 #    transformers; FaceFormer assigns it straight to a tensor. Take [0].
-#    Idempotent — only patches if the raw assignment is still present.
-if grep -q 'hidden_states = self.feature_projection(hidden_states)$' wav2vec.py; then
-  sed -i \
-    's/hidden_states = self.feature_projection(hidden_states)$/hidden_states = self.feature_projection(hidden_states)\n        if isinstance(hidden_states, tuple): hidden_states = hidden_states[0]/' \
-    wav2vec.py
-  echo "patched wav2vec.py (feature_projection tuple)"
-fi
+#    Done in python (BSD sed on macOS has incompatible -i syntax).
+python3 - <<'PY'
+import re
+src = open('wav2vec.py').read()
+if 'isinstance(hidden_states, tuple)' in src:
+    print('wav2vec.py already patched')
+else:
+    pat = re.compile(r'^([ \t]*)(hidden_states = self\.feature_projection\(hidden_states\))[ \t]*$',
+                     re.M)
+    src2, n = pat.subn(
+        lambda m: (m.group(1) + m.group(2) + '\n' + m.group(1) +
+                   'if isinstance(hidden_states, tuple): hidden_states = hidden_states[0]'),
+        src, count=1)
+    if n == 0:
+        raise SystemExit('ERROR: could not find feature_projection line in wav2vec.py; '
+                         'patch manually (see conduit README, Phase 6).')
+    open('wav2vec.py', 'w').write(src2)
+    print('patched wav2vec.py (feature_projection tuple)')
+PY
 
 # 3. predict (NOT render). demo.py defaults --device cuda and also calls
 #    render_sequence(), which needs pyrender/mesh libs we skip. We import
