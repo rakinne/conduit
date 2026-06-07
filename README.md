@@ -79,6 +79,22 @@ Producing `anim_data.js` (on a machine with internet + PyTorch):
 Any VOCASET-trained vertex-output model works the same way (CodeTalker,
 etc.) — the only contract is FLAME topology, `(T, 5023, 3)`.
 
+### Environment gotcha (Python 3.12)
+
+FaceFormer's `requirements.txt` pins 2021-era versions (`scipy==1.7.1`,
+`torch==1.9.0`, `transformers==4.6.1`) with no wheels for Python 3.11/3.12
+— that's the `No matching distribution found for scipy==1.7.1` error.
+Don't force nearest versions; use a Python 3.10 env instead. Two helpers
+in `tools/` automate it:
+
+- `requirements-faceformer-py310.txt` — relaxed, 3.10-compatible, inference
+  only (drops the pyrender/trimesh/opencv render stack you don't need, and
+  the stray `pickle` line which is stdlib). Copy it into your FaceFormer clone.
+- `run_faceformer.sh` — creates the conda env, installs the above, applies a
+  one-line patch to `wav2vec.py` (modern `transformers` returns a tuple from
+  `feature_projection`), and runs prediction CPU-only, skipping rendering.
+  `bash run_faceformer.sh demo/wav/your.wav` → `demo/result/your.npy`.
+
 **Attribution:** head geometry derived from FLAME — T. Li, T. Bolkart,
 M. J. Black, H. Li, J. Romero, *Learning a model of facial shape and
 expression from 4D scans*, ACM TOG (Proc. SIGGRAPH Asia), 2017.
