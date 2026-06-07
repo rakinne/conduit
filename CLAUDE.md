@@ -38,7 +38,6 @@ in the style of The Black Eyed Peas' *The E.N.D.* album cover. The head:
 | `tools/templates.pkl` | pre-generated output of the above |
 | `tools/run_faceformer.sh` | env setup + patched CPU inference on the user's machine |
 | `tools/requirements-faceformer-py310.txt` | relaxed FaceFormer deps for Python 3.10 |
-| `tools/speak_server.py` | localhost service: text → TTS → FaceFormer → bake → JSON (UPLINK) |
 | `assets/flame2023_Open.pkl` | gitignored (53 MB); download from flame.is.tue.mpg.de |
 
 ## Commands
@@ -117,17 +116,7 @@ slots 0–3 identities, 4–5 chaos, 6 speech, 7 free. Adding targets beyond
 10. **Sparse anim format** (`--min-move`, default 0.3 mm): speech models
     micro-jitter every vertex; sub-threshold motion is invisible but was
     ~40% of file size. 99.7% of motion energy retained on the test clip.
-11. **On-the-fly speech = local server, not browser ML or cloud.**
-    `speak_server.py` loads FaceFormer once and serves
-    /ping, /speak {text}, /animate {wavB64} with CORS *. The page
-    auto-detects it and shows the UPLINK bar. TTS = macOS `say`
-    (zero-dep) with a mock fallback; bake_anim.py was refactored into
-    load_head()/bake() library functions for in-memory baking. Hard
-    cap: 600 frames (20 s) per request — FaceFormer's PPE max_seq_len.
-    The speech morph slot is now ALWAYS allocated (zeroed = inert) so
-    clips swap at runtime via loadSpeech(). Mixed-content gotcha: the
-    uplink is unreachable from https-served pages.
-12. **FaceFormer-on-modern-machines shims** (all in `run_faceformer.sh`):
+11. **FaceFormer-on-modern-machines shims** (all in `run_faceformer.sh`):
     Python 3.10 env (upstream pins have no 3.11/3.12 wheels; never pip
     install the stray `pickle` line), `feature_projection` tuple patch,
     `torch.load` map_location for CPU-only, weight-norm key rename
