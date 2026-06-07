@@ -62,6 +62,27 @@
     animation:statblink .12s infinite;
   }
   @keyframes statblink{50%{opacity:.4}}
+  #uplink{
+    position:fixed;bottom:54px;left:50%;transform:translateX(-50%);
+    z-index:5;display:none;gap:8px;align-items:center;
+  }
+  #uplink input{
+    width:min(420px,70vw);padding:8px 12px;
+    background:rgba(0,20,8,.85);border:1px solid rgba(0,255,102,.35);
+    color:var(--grid-green);font-family:"Courier New",monospace;
+    font-size:12px;letter-spacing:.15em;outline:none;
+  }
+  #uplink input::placeholder{color:rgba(0,255,102,.35);}
+  #uplink input:focus{border-color:rgba(0,255,102,.8);
+    box-shadow:0 0 12px rgba(0,255,102,.25);}
+  #uplink button{
+    padding:8px 14px;background:rgba(0,255,102,.12);
+    border:1px solid rgba(0,255,102,.5);color:var(--grid-green);
+    font-family:"Courier New",monospace;font-size:11px;
+    letter-spacing:.25em;cursor:pointer;
+  }
+  #uplink button:hover{background:rgba(0,255,102,.25);}
+  #uplink button:disabled{opacity:.35;cursor:wait;}
 </style>
 </head>
 <body>
@@ -71,6 +92,11 @@
 <div class="scanlines"></div>
 <header><h1>THE END</h1></header>
 <footer><p id="status">FORM 01 · STABLE — MOVE THE CURSOR, IT WATCHES</p></footer>
+<div id="uplink">
+  <input id="uplink-text" type="text" maxlength="400"
+         placeholder="TYPE — THE HEAD WILL SPEAK" autocomplete="off">
+  <button id="uplink-send">TRANSMIT</button>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="head_data.js"></script>
@@ -211,18 +237,27 @@ headGeo.morphAttributes.position =
    per-frame vertex deltas stream into one extra morph slot held at
    influence 1, composing cleanly with identity + chaos morphs */
 const N_MORPH = HEAD_DATA.targets.length;       // 6 baked targets
+/* the speech slot always exists (zeroed = inert), so clips can be
+   loaded/swapped at runtime without touching the morph setup */
+const speechAttr = new THREE.BufferAttribute(
+  new Float32Array(b64f32(HEAD_DATA.pos).length), 3);
+speechAttr.setUsage(THREE.DynamicDrawUsage);
+headGeo.morphAttributes.position.push(speechAttr); // slot N_MORPH
 let speech = null;
+function loadSpeech(p, audioSrc){
+  if(speech && speech.playing) stopSpeech();
+  speech = {
+    raw: new Int16Array(
+      Uint8Array.from(atob(p.data), c=>c.charCodeAt(0)).buffer),
+    sIdx: b64u16(p.sparseIdx),
+    attr: speechAttr,
+    frames: p.frames, fps: p.fps, scale: p.scale,
+    playing: false, t0: 0,
+    audio: audioSrc ? new Audio(audioSrc) : null,
+  };
+}
 if (typeof ANIM_DATA !== 'undefined'){
-  const raw = new Int16Array(
-    Uint8Array.from(atob(ANIM_DATA.data), c=>c.charCodeAt(0)).buffer);
-  const sIdx = b64u16(ANIM_DATA.sparseIdx);     // verts that actually move
-  const attr = new THREE.BufferAttribute(
-    new Float32Array(b64f32(HEAD_DATA.pos).length), 3);
-  attr.setUsage(THREE.DynamicDrawUsage);
-  headGeo.morphAttributes.position.push(attr);   // slot N_MORPH
-  speech = {raw, sIdx, attr, frames:ANIM_DATA.frames, fps:ANIM_DATA.fps,
-            scale:ANIM_DATA.scale, playing:false, t0:0,
-            audio: ANIM_DATA.wav ? new Audio(ANIM_DATA.wav) : null};
+  loadSpeech(ANIM_DATA, ANIM_DATA.wav || null);
 }
 
 const headGroup = new THREE.Group();
@@ -353,7 +388,7 @@ function setInfluences(mesh, cur, nxt, e, c1, c2){
   if(nxt>0) inf[nxt-1] = e;
   inf[CHAOS_A] = c1;
   inf[CHAOS_B] = c2;
-  if(speech) inf[N_MORPH] = 1;
+  inf[N_MORPH] = 1;   // speech slot: zeroed attribute when idle
 }
 setInfluences(skull,0,0,0,0,0);
 setInfluences(shell,0,0,0,0,0);
@@ -425,6 +460,7 @@ function stopSpeech(){
   statusEl.textContent = `FORM ${IDENTITY_NAMES[curId]} · STABLE`;
 }
 addEventListener('keydown', e=>{
+  if(e.target && e.target.tagName === 'INPUT') return;
   if(e.code==='Space' && speech){
     e.preventDefault();
     speech.playing ? stopSpeech() : startSpeech();
@@ -433,6 +469,50 @@ addEventListener('keydown', e=>{
 if(speech){
   document.getElementById('status').textContent += ' — [SPACE] SPEAKS';
 }
+
+/* --- UPLINK: on-the-fly speech via tools/speak_server.py ------------
+   The server runs on the user's machine; if it answers /ping, the
+   input bar appears. Note: a page served over httpS cannot call
+   http://localhost (mixed content) — open index.html locally instead. */
+const UPLINK = 'http://localhost:8765';
+const uplinkEl = document.getElementById('uplink');
+const uplinkText = document.getElementById('uplink-text');
+const uplinkSend = document.getElementById('uplink-send');
+fetch(UPLINK + '/ping').then(r=>r.json()).then(j=>{
+  if(j.ok){
+    uplinkEl.style.display = 'flex';
+    statusEl.textContent += ` — UPLINK ONLINE (${j.mode})`;
+  }
+}).catch(()=>{});
+async function transmit(){
+  const text = uplinkText.value.trim();
+  if(!text || uplinkSend.disabled) return;
+  uplinkSend.disabled = true;
+  const prev = statusEl.textContent;
+  statusEl.textContent = 'SYNTHESIZING …';
+  statusEl.classList.add('resequencing');
+  try{
+    const r = await fetch(UPLINK + '/speak', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text})});
+    const p = await r.json();
+    if(!r.ok) throw new Error(p.error || r.status);
+    loadSpeech(p, p.audioB64 ? 'data:audio/wav;base64,' + p.audioB64 : null);
+    statusEl.classList.remove('resequencing');
+    startSpeech();
+    uplinkText.value = '';
+  }catch(err){
+    statusEl.classList.remove('resequencing');
+    statusEl.textContent = 'UPLINK ERROR: ' + err.message;
+    setTimeout(()=>{ statusEl.textContent = prev; }, 4000);
+  }finally{
+    uplinkSend.disabled = false;
+  }
+}
+uplinkSend.addEventListener('click', transmit);
+uplinkText.addEventListener('keydown', e=>{
+  if(e.code==='Enter') transmit();
+});
 
 /* ============================================================
    6. CONSTRAINED HEAD MOTION (unchanged limits)

@@ -76,6 +76,23 @@ Producing `anim_data.js` (on a machine with internet + PyTorch):
    `anim_data.js` (serve gzipped; it compresses ~4x)
 5. Put your .wav next to `index.html`, reload, press SPACE
 
+### On-the-fly speech (UPLINK)
+
+`tools/speak_server.py` turns the manual pipeline into a one-keystroke loop.
+Run it on your machine inside the faceformer env:
+
+    source .venv-faceformer/bin/activate   # or: conda activate faceformer
+    python3 tools/speak_server.py --faceformer ~/Downloads/FaceFormer-main
+
+It loads the model once, then serves localhost:8765. When conduit's page
+detects it, an UPLINK input bar appears — type text, hit TRANSMIT, and the
+head speaks it with generated voice (macOS `say`) and FaceFormer lips.
+`--mock` runs without torch/model for plumbing tests. Limits: 20 s of
+speech per request (FaceFormer's positional encoding caps at 600 frames);
+expect inference to take roughly real-time-or-slower on CPU. The uplink
+only works from pages served over http/file (an https page can't call
+http://localhost — mixed content).
+
 `bake_anim.js` output is sparse: verts whose peak motion is below
 `--min-move` (default 0.3 mm — invisible at typical view size) are dropped,
 which cuts file size ~40% with 99.7% of motion energy retained. A baked
