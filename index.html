@@ -74,6 +74,8 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="head_data.js"></script>
+<!-- optional: speech animation baked by tools/bake_anim.py; a 404 here is harmless -->
+<script src="anim_data.js"></script>
 <script>
 /* ============================================================
    1. MATRIX RAIN BACKDROP
@@ -205,6 +207,23 @@ headGeo.morphTargetsRelative = true;         // targets are deltas
 headGeo.morphAttributes.position =
   HEAD_DATA.targets.map(t => new THREE.BufferAttribute(b64f32(t), 3));
 
+/* optional Phase-6 speech animation (anim_data.js, via tools/bake_anim.py):
+   per-frame vertex deltas stream into one extra morph slot held at
+   influence 1, composing cleanly with identity + chaos morphs */
+const N_MORPH = HEAD_DATA.targets.length;       // 6 baked targets
+let speech = null;
+if (typeof ANIM_DATA !== 'undefined'){
+  const raw = new Int16Array(
+    Uint8Array.from(atob(ANIM_DATA.data), c=>c.charCodeAt(0)).buffer);
+  const attr = new THREE.BufferAttribute(
+    new Float32Array(b64f32(HEAD_DATA.pos).length), 3);
+  attr.setUsage(THREE.DynamicDrawUsage);
+  headGeo.morphAttributes.position.push(attr);   // slot N_MORPH
+  speech = {raw, attr, frames:ANIM_DATA.frames, fps:ANIM_DATA.fps,
+            scale:ANIM_DATA.scale, playing:false, t0:0,
+            audio: ANIM_DATA.wav ? new Audio(ANIM_DATA.wav) : null};
+}
+
 const headGroup = new THREE.Group();
 scene.add(headGroup);
 
@@ -328,11 +347,12 @@ const easeInOut = u => u<.5 ? 4*u*u*u : 1-Math.pow(-2*u+2,3)/2;
 
 function setInfluences(mesh, cur, nxt, e, c1, c2){
   const inf = mesh.morphTargetInfluences;
-  for(let i=0;i<inf.length;i++) inf[i]=0;
+  for(let i=0;i<N_MORPH;i++) inf[i]=0;
   if(cur>0) inf[cur-1] = 1-e;
   if(nxt>0) inf[nxt-1] = e;
   inf[CHAOS_A] = c1;
   inf[CHAOS_B] = c2;
+  if(speech) inf[N_MORPH] = 1;
 }
 setInfluences(skull,0,0,0,0,0);
 setInfluences(shell,0,0,0,0,0);
@@ -369,6 +389,40 @@ function updateShapeShift(t){
       statusEl.classList.remove('resequencing');
     }
   }
+}
+
+/* speech playback: interpolate baked frames into the speech slot */
+function updateSpeech(t){
+  if(!speech || !speech.playing) return;
+  const f = (t - speech.t0)/1000 * speech.fps;
+  if(f >= speech.frames-1){ stopSpeech(); return; }
+  const i0 = Math.floor(f), fr = f - i0;
+  const a = speech.attr.array, raw = speech.raw, n = a.length, s = speech.scale;
+  const o0 = i0*n, o1 = o0+n;
+  for(let i=0;i<n;i++) a[i] = (raw[o0+i]*(1-fr) + raw[o1+i]*fr) * s;
+  speech.attr.needsUpdate = true;
+}
+function startSpeech(){
+  if(!speech) return;
+  speech.playing = true; speech.t0 = performance.now();
+  if(speech.audio){ speech.audio.currentTime = 0; speech.audio.play().catch(()=>{}); }
+  statusEl.textContent = `FORM ${IDENTITY_NAMES[curId]} · SPEAKING`;
+}
+function stopSpeech(){
+  if(!speech) return;
+  speech.playing = false;
+  speech.attr.array.fill(0); speech.attr.needsUpdate = true;
+  if(speech.audio) speech.audio.pause();
+  statusEl.textContent = `FORM ${IDENTITY_NAMES[curId]} · STABLE`;
+}
+addEventListener('keydown', e=>{
+  if(e.code==='Space' && speech){
+    e.preventDefault();
+    speech.playing ? stopSpeech() : startSpeech();
+  }
+});
+if(speech){
+  document.getElementById('status').textContent += ' — [SPACE] SPEAKS';
 }
 
 /* ============================================================
@@ -413,6 +467,7 @@ function animate(t){
   if(t - texTick > texRate){ paintGrid(t); gridTex.needsUpdate = true; texTick = t; }
 
   updateShapeShift(t);
+  updateSpeech(t);
 
   if(t - lastMouseMove > 2500){
     const [iy, ip] = idleTargets(t);

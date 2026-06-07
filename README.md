@@ -54,6 +54,31 @@ To regenerate: download FLAME 2023 Open from https://flame.is.tue.mpg.de
 (CC-BY-4.0), place the pkl at `assets/flame2023_Open.pkl` (gitignored),
 then `python3 tools/convert_flame.py assets/flame2023_Open.pkl`.
 
+## Speech-driven animation (Phase 6)
+
+The page has an optional speech mode: if `anim_data.js` is present, the
+status line gains `[SPACE] SPEAKS` and spacebar plays per-frame vertex
+motion (one dynamic morph slot at influence 1, composing with the identity
+and chaos morphs) in sync with an optional audio file.
+
+Producing `anim_data.js` (on a machine with internet + PyTorch):
+1. `git clone https://github.com/EvelynFan/FaceFormer` and install its
+   requirements (PyTorch, transformers, librosa — the wav2vec2 audio
+   encoder auto-downloads from the Hugging Face Hub on first run)
+2. Obtain `vocaset.pth` pretrained weights (README links; they have
+   rotted before — see FaceFormer issue #93 for author-provided mirrors)
+   and `FLAME_sample.ply` from the VOCA repo as the template
+3. Run the vocaset demo command from FaceFormer's README on your .wav —
+   it emits a `(T, 15069)` .npy of FLAME-topology vertex frames at 30fps
+4. `python3 tools/bake_anim.py prediction.npy --fps 30 --wav speech.wav`
+   in this repo — it remaps frames through `origIdx`, applies the scene
+   transform from `head_data.js`, quantizes to int16, and writes
+   `anim_data.js` (serve gzipped; it compresses ~4x)
+5. Put your .wav next to `index.html`, reload, press SPACE
+
+Any VOCASET-trained vertex-output model works the same way (CodeTalker,
+etc.) — the only contract is FLAME topology, `(T, 5023, 3)`.
+
 **Attribution:** head geometry derived from FLAME — T. Li, T. Bolkart,
 M. J. Black, H. Li, J. Romero, *Learning a model of facial shape and
 expression from 4D scans*, ACM TOG (Proc. SIGGRAPH Asia), 2017.
