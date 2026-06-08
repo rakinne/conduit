@@ -1,1 +1,5 @@
 assets/*.pkl
+
+# desktop shell — build output + downloadable vendored lib
+desktop/build/
+desktop/vendor/
