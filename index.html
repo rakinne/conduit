@@ -83,6 +83,23 @@
   }
   #uplink button:hover{background:rgba(0,255,102,.25);}
   #uplink button:disabled{opacity:.35;cursor:wait;}
+
+  /* ---- DESKTOP OVERLAY MODE (driven by the native Swift shell) -------
+     Strips the framed "box" so only the head floats on transparency.
+     Activated when window.__CONDUIT_OVERLAY is set (or ?overlay in URL);
+     has no effect in a normal browser session. */
+  html.overlay,html.overlay body{background:transparent !important;}
+  body.overlay #rain,
+  body.overlay .vignette,
+  body.overlay .scanlines,
+  body.overlay header,
+  body.overlay footer{display:none !important;}
+  /* faint frame + grab cursor while the shell is in "grab" mode */
+  body.overlay.grab{cursor:grab;}
+  body.overlay.grab::after{
+    content:"";position:fixed;inset:0;z-index:9;pointer-events:none;
+    border:1px solid rgba(0,255,102,.22);
+  }
 </style>
 </head>
 <body>
@@ -103,6 +120,20 @@
 <!-- optional: speech animation baked by tools/bake_anim.py; a 404 here is harmless -->
 <script src="anim_data.js"></script>
 <script>
+/* ============================================================
+   0. OVERLAY GATE
+   The native desktop shell sets window.__CONDUIT_OVERLAY before this
+   script runs (?overlay=1 also works in a browser). In overlay mode the
+   framed box is hidden and the head is driven by the shell's global
+   cursor feed via window.__conduitPoint(). Inert in normal sessions.
+   ============================================================ */
+const OVERLAY = !!window.__CONDUIT_OVERLAY
+             || new URLSearchParams(location.search).has('overlay');
+if(OVERLAY){
+  document.documentElement.classList.add('overlay');
+  document.body.classList.add('overlay');          // script runs at end of <body>
+}
+
 /* ============================================================
    1. MATRIX RAIN BACKDROP
    ============================================================ */
@@ -532,8 +563,25 @@ function pointTo(cx, cy){
   targetPitch = clamp(ny>0 ? ny*PITCH_DOWN : ny*-PITCH_UP, PITCH_UP, PITCH_DOWN);
   lastMouseMove = performance.now();
 }
-addEventListener('mousemove', e=>pointTo(e.clientX,e.clientY));
-addEventListener('touchmove', e=>pointTo(e.touches[0].clientX,e.touches[0].clientY),{passive:true});
+if(!OVERLAY){
+  addEventListener('mousemove', e=>pointTo(e.clientX,e.clientY));
+  addEventListener('touchmove', e=>pointTo(e.touches[0].clientX,e.touches[0].clientY),{passive:true});
+}
+
+/* --- DESKTOP SHELL HOOKS --------------------------------------------
+   The native shell feeds the global cursor as already-normalized coords
+   (page convention: +x right, +y down, each in [-1,1]) so the head can
+   watch the cursor anywhere on screen, focused or not. __conduitGrab
+   toggles the faint interactive frame. */
+window.__conduitPoint = function(nx, ny){
+  nx = clamp(nx, -1, 1); ny = clamp(ny, -1, 1);
+  targetYaw   = clamp(nx*YAW_MAX, -YAW_MAX, YAW_MAX);
+  targetPitch = clamp(ny>0 ? ny*PITCH_DOWN : ny*-PITCH_UP, PITCH_UP, PITCH_DOWN);
+  lastMouseMove = performance.now();
+};
+window.__conduitGrab = function(on){
+  document.body.classList.toggle('grab', !!on);
+};
 
 let idleSeed = Math.random()*100;
 function idleTargets(t){

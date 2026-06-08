@@ -38,6 +38,9 @@ in the style of The Black Eyed Peas' *The E.N.D.* album cover. The head:
 | `tools/templates.pkl` | pre-generated output of the above |
 | `tools/run_faceformer.sh` | env setup + patched CPU inference on the user's machine |
 | `tools/requirements-faceformer-py310.txt` | relaxed FaceFormer deps for Python 3.10 |
+| `desktop/ConduitHead.swift` | native macOS shell — floating, transparent, always-on-top head |
+| `desktop/build.sh` | builds `ConduitHead.app` (vendors three.js, rewrites src, compiles Swift) |
+| `desktop/README.md` | desktop shell usage + tuning |
 | `assets/flame2023_Open.pkl` | gitignored (53 MB); download from flame.is.tue.mpg.de |
 
 ## Commands
@@ -123,6 +126,28 @@ slots 0–3 identities, 4–5 chaos, 6 speech, 7 free. Adding targets beyond
     (`weight_g/weight_v` → `parametrizations.weight.original0/1`),
     rendering stack stubbed out (only the .npy matters). Patches are
     python-based — BSD sed on macOS broke the sed version.
+12. **Desktop shell = native Swift + WKWebView, not Electron/Tauri.** The
+    head can run as a floating, transparent, always-on-top macOS app
+    (`desktop/`). Swift over Electron (no bundled Chromium; ~9 MB app,
+    ~80 MB dedicated RAM vs Electron's far heavier footprint — the user's
+    stated resource concern) and over Tauri (Rust build + plugin needed
+    for the one feature that matters here). The signature feature —
+    **the head watches the cursor anywhere on screen, even unfocused** —
+    is a few lines of AppKit (`NSEvent` global mouse monitor, which needs
+    *no* Accessibility permission; only keyboard monitors do). Window
+    opacity = `NSWindow.alphaValue`; always-on-top = `.floating` level +
+    all-Spaces `collectionBehavior`; click-through = `ignoresMouseEvents`,
+    toggled by a Carbon global hotkey (`⌥⌘H`, also permission-free).
+13. **Overlay mode is additive to `index.html`, not a fork.** The shell
+    sets `window.__CONDUIT_OVERLAY` (a `WKUserScript` at documentStart;
+    `?overlay=1` works in a browser too). That hides the framed box and
+    swaps the page's own mouse listeners for shell-driven hooks —
+    `window.__conduitPoint(nx,ny)` (normalized, page convention: +x right
+    / +y down) and `window.__conduitGrab(bool)`. The renderer was already
+    `alpha:true`, so the canvas is transparent for free. Normal browser
+    sessions are byte-for-byte unaffected (the gate is false). **New
+    integration contract**: keep these three globals stable — the Swift
+    shell calls them by name.
 
 ## Conventions & gotchas
 
