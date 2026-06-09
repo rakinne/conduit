@@ -15,6 +15,8 @@ import sys
 import time
 import types
 import unittest
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
@@ -228,6 +230,75 @@ class BrainTests(unittest.TestCase):
         b = ss.Brain("http://127.0.0.1:1", "qwen2.5:3b")
         b.warm()
         self.assertEqual(b.state, "error")
+
+
+class CorsPolicyTests(unittest.TestCase):
+    """RI-004: only conduit's own origins (a file:// page -> 'null', or a
+    localhost/loopback http(s) origin) may read /ask replies; every other site
+    gets no Access-Control-Allow-Origin header, so the browser blocks the read."""
+
+    def test_allows_file_null_origin(self):
+        self.assertEqual(ss._allowed_origin("null"), "null")
+
+    def test_allows_localhost_origins(self):
+        for o in ("http://localhost:8765", "http://127.0.0.1",
+                  "https://localhost:3000", "http://[::1]:8765"):
+            self.assertEqual(ss._allowed_origin(o), o, o)
+
+    def test_blocks_foreign_and_lookalike_origins(self):
+        for o in ("https://evil.example.com", "http://localhost.evil.com",
+                  "http://127.0.0.1.evil.com", "http://notlocalhost", "", None):
+            self.assertIsNone(ss._allowed_origin(o), o)
+
+
+class CorsServerTests(unittest.TestCase):
+    """The policy is wired into real responses: /ping echoes ACAO for a local
+    Origin and omits it for a foreign one, and the preflight is gated the same
+    way (so a foreign JSON POST never leaves the browser, not just its reply)."""
+
+    @classmethod
+    def setUpClass(cls):
+        # /ping and OPTIONS don't touch the predictor/tts/head, so None is fine.
+        handler = ss.make_handler(None, None, "mock-silence", None, "mock",
+                                  ss.MockBrain())
+        cls.httpd = HTTPServer(("127.0.0.1", 0), handler)
+        cls.port = cls.httpd.server_address[1]
+        Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+
+    def _request(self, method, origin):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/ping", method=method)
+        if origin is not None:
+            req.add_header("Origin", origin)
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, r.headers
+
+    def test_ping_echoes_local_origin(self):
+        status, hdrs = self._request("GET", "null")
+        self.assertEqual(status, 200)
+        self.assertEqual(hdrs.get("Access-Control-Allow-Origin"), "null")
+
+    def test_ping_omits_acao_for_foreign_origin(self):
+        status, hdrs = self._request("GET", "https://evil.example.com")
+        self.assertEqual(status, 200)                       # body still served...
+        self.assertIsNone(hdrs.get("Access-Control-Allow-Origin"))  # ...unreadable cross-origin
+
+    def test_preflight_allows_local_origin(self):
+        status, hdrs = self._request("OPTIONS", "http://localhost:8765")
+        self.assertEqual(status, 204)
+        self.assertEqual(hdrs.get("Access-Control-Allow-Origin"),
+                         "http://localhost:8765")
+        self.assertIn("POST", hdrs.get("Access-Control-Allow-Methods", ""))
+
+    def test_preflight_blocks_foreign_origin(self):
+        status, hdrs = self._request("OPTIONS", "https://evil.example.com")
+        self.assertEqual(status, 204)
+        self.assertIsNone(hdrs.get("Access-Control-Allow-Origin"))
+        self.assertIsNone(hdrs.get("Access-Control-Allow-Methods"))
 
 
 if __name__ == "__main__":
