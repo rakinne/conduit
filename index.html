@@ -84,6 +84,24 @@
   #uplink button:hover{background:rgba(0,255,102,.25);}
   #uplink button:disabled{opacity:.35;cursor:wait;}
 
+  /* ---- ASK-STATE CAPTION (visible ask feedback under the head) -------
+     The overlay hides the footer #status, so ask-state needs its own
+     home here. Dark backing keeps green text legible over ANY desktop. */
+  #ask-caption{
+    position:fixed;bottom:92px;left:50%;transform:translateX(-50%);
+    z-index:5;max-width:min(440px,80vw);text-align:center;
+    font-family:"Courier New",monospace;font-size:12px;letter-spacing:.18em;
+    color:var(--grid-green);padding:4px 12px;border-radius:3px;
+    background:rgba(0,16,6,.7);
+    text-shadow:0 0 8px rgba(0,255,102,.7);
+    opacity:0;transition:opacity .25s;pointer-events:none;
+  }
+  #ask-caption.show{opacity:1;}
+  #ask-caption.thinking{animation:statblink .6s infinite;}
+  #ask-caption.loading,#ask-caption.offline{color:rgba(0,255,102,.5);text-shadow:none;}
+  #ask-caption.error{color:#ff7a7a;text-shadow:0 0 8px rgba(255,80,80,.6);
+    background:rgba(26,4,4,.72);}
+
   /* ---- DESKTOP OVERLAY MODE (driven by the native Swift shell) -------
      Strips the framed "box" so only the head floats on transparency.
      Activated when window.__CONDUIT_OVERLAY is set (or ?overlay in URL);
@@ -109,6 +127,7 @@
 <div class="scanlines"></div>
 <header><h1>THE END</h1></header>
 <footer><p id="status">FORM 01 · STABLE — MOVE THE CURSOR, IT WATCHES</p></footer>
+<div id="ask-caption" role="status" aria-live="polite"></div>
 <div id="uplink">
   <input id="uplink-text" type="text" maxlength="400"
          placeholder="TYPE — THE HEAD WILL SPEAK" autocomplete="off">
@@ -509,8 +528,34 @@ const UPLINK = 'http://localhost:8765';
 const uplinkEl = document.getElementById('uplink');
 const uplinkText = document.getElementById('uplink-text');
 const uplinkSend = document.getElementById('uplink-send');
+const askCaption = document.getElementById('ask-caption');
 
-let uplink = { online:false, brain:'none', model:null, announced:false };
+let uplink = { online:false, brain:'none', model:null };
+
+// --- ask-state caption: the head's visible feedback (esp. in overlay mode) ---
+// Routes every ask-state to one aria-live line under the head, so the desktop
+// overlay (which hides the footer #status) never shows silent dead air.
+let askClearTimer = null;
+function setAskStatus(text, kind, fadeMs){
+  clearTimeout(askClearTimer);
+  if(!text){ askCaption.className = ''; askCaption.textContent = ''; return; }
+  askCaption.textContent = text;
+  askCaption.className = 'show' + (kind ? ' ' + kind : '');
+  askCaption.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+  const fade = fadeMs != null ? fadeMs : ({ info:3000, error:5000, reply:8000 })[kind];
+  if(fade) askClearTimer = setTimeout(()=>{
+    if(askCaption.textContent === text) setAskStatus('');
+  }, fade);
+}
+// pure (unit-tested in Node): brain state -> caption {text, kind}
+function brainCaption(brain, model){
+  const m = model ? ` (${model})` : '';
+  if(brain === 'ready') return { text:`BRAIN ONLINE${m}`, kind:'info' };
+  if(brain === 'pulling' || brain === 'warming') return { text:'BRAIN LOADING…', kind:'loading' };
+  if(brain === 'offline' || brain === 'error') return { text:'BRAIN OFFLINE', kind:'offline' };
+  if(brain === 'none') return { text:'UPLINK ONLINE', kind:'info' };
+  return { text:'', kind:'' };
+}
 
 // pure helpers (unit-tested headlessly in Node): endpoint + bar copy per state
 function uplinkEndpoint(brain){ return brain === 'ready' ? '/ask' : '/speak'; }
@@ -532,15 +577,14 @@ async function pingUplink(){
     const j = await (await fetch(UPLINK + '/ping')).json();
     if(!j.ok) return;
     uplink.online = true;
+    const prevBrain = uplink.brain;
     uplink.brain = j.brain || 'none';      // older servers omit brain -> speak-only
     uplink.model = j.model || null;
-    if(!uplink.announced){
-      uplink.announced = true;
-      const m = uplink.model ? ` (${uplink.model})` : '';
-      statusEl.textContent += uplink.brain === 'ready'
-        ? ` — BRAIN ONLINE${m}` : ` — UPLINK ONLINE (${j.mode})`;
-    }
     applyUplinkUI();
+    if(uplink.brain !== prevBrain){        // announce only on change, not every poll
+      const c = brainCaption(uplink.brain, uplink.model);
+      setAskStatus(c.text, c.kind);
+    }
     if(uplink.brain === 'pulling' || uplink.brain === 'warming')
       setTimeout(pingUplink, 3000);        // poll until the brain warms, then flip live
   }catch(e){ /* server not running; bar stays hidden */ }
@@ -552,9 +596,7 @@ async function transmit(){
   if(!text || uplinkSend.disabled) return;
   const ask = uplink.brain === 'ready';    // re-checked at send time, never silent
   uplinkSend.disabled = true;
-  const prev = statusEl.textContent;
-  statusEl.textContent = ask ? '· THINKING …' : 'SYNTHESIZING …';
-  statusEl.classList.add('resequencing');
+  setAskStatus(ask ? '· THINKING' : '· SYNTHESIZING', 'thinking');  // <50ms "I heard you"
   try{
     const r = await fetch(UPLINK + uplinkEndpoint(uplink.brain), {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -565,20 +607,16 @@ async function transmit(){
       throw new Error(p.error || ('HTTP ' + r.status));
     }
     if(p.tooLong){                         // reply produced but too long to speak
-      statusEl.classList.remove('resequencing');
-      statusEl.textContent = '· ' + (p.reply || 'reply too long to speak');
+      setAskStatus(p.reply || 'reply too long to speak', 'reply');  // show it, don't lose it
       uplinkText.value = '';
-      setTimeout(()=>{ statusEl.textContent = prev; }, 6000);
       return;
     }
     loadSpeech(p, p.audioB64 ? 'data:audio/wav;base64,' + p.audioB64 : null);
-    statusEl.classList.remove('resequencing');
-    startSpeech();                          // sets · SPEAKING
+    setAskStatus(p.reply || '', 'reply', 14000);  // subtitle the spoken answer (a11y / muted)
+    startSpeech();                          // sets · SPEAKING on the footer identity line
     uplinkText.value = '';
   }catch(err){
-    statusEl.classList.remove('resequencing');
-    statusEl.textContent = (ask ? 'BRAIN ERROR: ' : 'UPLINK ERROR: ') + err.message;
-    setTimeout(()=>{ statusEl.textContent = prev; }, 4000);
+    setAskStatus((ask ? 'BRAIN ERROR: ' : 'UPLINK ERROR: ') + err.message, 'error');
   }finally{
     uplinkSend.disabled = false;
   }
@@ -624,6 +662,8 @@ window.__conduitPoint = function(nx, ny){
 };
 window.__conduitGrab = function(on){
   document.body.classList.toggle('grab', !!on);
+  // grabbing makes the overlay interactive — focus the input so you can ask at once
+  if(on) setTimeout(()=>{ try{ uplinkText.focus(); }catch(e){} }, 0);
 };
 
 let idleSeed = Math.random()*100;
