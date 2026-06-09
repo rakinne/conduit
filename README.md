@@ -125,7 +125,7 @@ When the brain is ready the UPLINK bar switches to **ASK** mode (placeholder
 bar — the mode is shown in the placeholder/button and never silently swapped.
 
 **Status:** server (`/ask`) and page (UPLINK) are wired and tested —
-`make test-all` (27 assertions: brain + frontend routing) and the full
+`make test-all` (30 assertions: brain + frontend routing) and the full
 `/ping`/`/ask`/`/speak` contract verified end-to-end in mock mode (`make mock`,
 numpy+scipy only). Real lips + audio await a run on a FaceFormer machine; see
 `TODOS.md`.
@@ -138,6 +138,13 @@ A `Makefile` runs the backend on any machine, with or without FaceFormer:
     make mock-venv  # one-time: minimal numpy+scipy venv
     make mock       # run the /ask -> speak loop in mock mode
     make serve FACEFORMER=~/Downloads/FaceFormer-main   # the real thing
+    make trace-ui   # local Phoenix trace UI (observability — see below)
+    make trace-deps # add the trace client to the mock venv
+
+If port 8765 is already in use, the server names the process holding it (PID +
+command, via `lsof`) and exits cleanly instead of dumping a raw bind traceback —
+and it checks *before* the slow model load. Override with `make serve PORT=8766`
+(the page and desktop shell expect 8765, so freeing it is usually the real fix).
 
 `bake_anim.js` output is sparse: verts whose peak motion is below
 `--min-move` (default 0.3 mm — invisible at typical view size) are dropped,
@@ -149,6 +156,39 @@ asset).
 
 Any VOCASET-trained vertex-output model works the same way (CodeTalker,
 etc.) — the only contract is FLAME topology, `(T, 5023, 3)`.
+
+### Observability (local tracing)
+
+Optional, **local-only** tracing of the `/ask` conversation — the brain's
+no-cloud ethos extended to telemetry: the trace data (your questions and the
+head's replies) never leaves the machine. It uses **Arize Phoenix**, which runs
+a localhost collector, stores traces on-disk, and needs no account. (LangSmith
+was rejected: the cloud SaaS would ship conversation logs off the box, and
+self-hosting it is too heavyweight.)
+
+Off by default. Turn it on with `CONDUIT_TRACE=1` — export it, or drop it in a
+gitignored repo `.env` that the server loads at startup. Each turn becomes a
+`conduit.ask` chain span (question in, the head's reply out) wrapping an
+`ollama.chat` LLM span (model + prompt/completion token counts, from Ollama's
+own response accounting). When it's off — or the trace client isn't installed —
+tracing is a no-op shim and the brain stays a stdlib-only path, so nothing else
+changes (the unit tests import with the standard library alone).
+
+    make trace-deps            # once: add the light client to the mock venv
+    make trace-ui              # run the Phoenix UI + collector (localhost:6006)
+    CONDUIT_TRACE=1 make mock  # or `make serve`; chat, then open :6006
+
+Two pieces, split so the server env stays light: the **server** only needs the
+OTLP client `arize-phoenix-otel` (`tools/requirements-phoenix.txt`; the
+faceformer env often already has full phoenix); the **UI** needs the full
+`arize-phoenix` package (`make trace-ui`, run from system python). One gotcha is
+baked into the server so you don't hit it: `phoenix.otel.register()` defaults to
+gRPC on `:4317` and ignores `PHOENIX_COLLECTOR_ENDPOINT`, so the endpoint is
+pinned to the HTTP collector (`:6006/v1/traces`) — otherwise spans silently miss
+the UI ("waiting for traces" with everything else looking fine). On startup the
+server logs `[trace] Phoenix tracing ON ...`; if it says `Phoenix unavailable`,
+the client isn't installed in that env, and if no `[trace]` line prints at all,
+`CONDUIT_TRACE` isn't set.
 
 ### Environment gotcha (Python 3.10 only, + setuptools<81)
 
