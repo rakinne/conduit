@@ -1,0 +1,24 @@
+# Optional: LOCAL conversation tracing for the /ask brain via Arize Phoenix.
+# Everything stays on your machine — no account, no vendor cloud (decision #16).
+#
+# TWO pieces, deliberately split so the SERVER env stays light:
+#
+#   * the SERVER only needs the lightweight OTLP *client* to emit spans — that's
+#     this file, `arize-phoenix-otel` (no UI/web bulk). Install it into whatever
+#     env runs speak_server.py:
+#       make serve -> the faceformer conda env (often already has full phoenix)
+#       make mock  -> the mock venv, via:   make trace-deps
+#
+#   * the Phoenix *UI / collector* needs the FULL package, `arize-phoenix`. Run it
+#     with `make trace-ui` (uses your system python). Install once if missing:
+#       pip install arize-phoenix
+#
+# Then enable tracing (the repo `.env` already has CONDUIT_TRACE=1) and chat with
+# the head; open http://localhost:6006. Confirm via the server's startup log line
+#   [trace] Phoenix tracing ON (project=conduit, endpoint=http://localhost:6006/v1/traces)
+# If it instead says "Phoenix unavailable", this client isn't installed in THAT
+# env. If it never prints, CONDUIT_TRACE isn't set (check `.env` / restart).
+#
+# NOTE: the endpoint MUST be the HTTP collector (default http://localhost:6006);
+# the server pins the /v1/traces path so spans don't default to gRPC :4317.
+arize-phoenix-otel

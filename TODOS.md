@@ -24,6 +24,27 @@
       `BRAIN ONLINE/LOADING/OFFLINE`, the `tooLong` text display.
 - [ ] Tune `SYSTEM_PROMPT` / `MAX_REPLY_WORDS` against a real model's verbosity.
 
+## Observability — LOCAL conversation tracing (Arize Phoenix)
+
+**Done**
+- `speak_server.py`: opt-in `CONDUIT_TRACE=1` tracing. Each `/ask` turn → a
+  `conduit.ask` chain span (question in / reply out) wrapping an `ollama.chat`
+  LLM span (model + prompt/completion token counts from Ollama's own response
+  accounting). No-op shim when off or when `arize-phoenix` is absent, so the
+  brain stays stdlib-only. `tools/requirements-phoenix.txt`, `make trace-ui`.
+  Tests in `test_speak_ask.py` (no-op transparency + error propagation + usage
+  capture). Local only — nothing leaves the machine (decision #16).
+
+**Left**
+- [ ] Real run: `pip install arize-phoenix` in the faceformer env, `make trace-ui`,
+      then `CONDUIT_TRACE=1 make serve`; confirm spans + token counts render for a
+      live qwen2.5:3b turn at http://localhost:6006.
+- [ ] Optionally extend the `conduit.ask` span with child spans for the speech
+      pipeline (TTS + FaceFormer timings, already in `payload.meta.timings`) and
+      tag `tooLong` / error turns.
+- [ ] Consider a Phoenix service in the Docker phase (compose) so traces persist
+      across runs without a separately-launched UI.
+
 ## Repeatable backend (Docker) — future phase
 
 Goal: make `speak_server` + Ollama reproducible on any machine. The biggest win

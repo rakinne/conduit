@@ -29,6 +29,7 @@ Usage (plumbing test, no torch/model needed):
 """
 import argparse
 import base64
+import errno
 import io
 import json
 import os
@@ -49,6 +50,103 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from bake_anim import bake, load_head  # noqa: E402
+
+def _load_dotenv(path):
+    """Minimal stdlib `.env` loader (no python-dotenv dependency): KEY=VALUE
+    lines -> the process env, WITHOUT clobbering vars already set in the real
+    environment (an exported shell var wins). Tolerates surrounding quotes and
+    `#` comments. The server calls this at startup so a local `.env` can flip on
+    CONDUIT_TRACE + point at the Phoenix collector with nothing exported by hand."""
+    try:
+        with open(path) as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                os.environ.setdefault(key.strip(),
+                                      val.strip().strip("'").strip('"'))
+    except FileNotFoundError:
+        pass
+
+
+# ----------------------------------------------------- observability (opt-in)
+# LOCAL-ONLY conversation tracing via Arize Phoenix. OFF by default; set
+# CONDUIT_TRACE=1 (export it, or drop it in the repo `.env`, which main() loads)
+# to enable. When on (and `arize-phoenix` is installed), each /ask turn is traced
+# to a Phoenix collector on localhost: a parent `conduit.ask` chain span (your
+# question in, the head's reply out) wrapping an `ollama.chat` LLM span (model +
+# prompt/completion token counts). Phoenix stores traces on-disk — NOTHING leaves
+# the machine (decision #16). The inference was already local (#14); so is the
+# telemetry. No vendor cloud, no account.
+#
+# When CONDUIT_TRACE is unset OR `arize-phoenix` is missing, TRACER is a no-op
+# shim with the same surface, so the brain stays a stdlib-only, no-extra-dep path
+# (the unit tests import this module with nothing but the standard library) and
+# reply() behaves identically.
+#
+# View traces: `make trace-ui` (python -m phoenix.server.main serve) -> :6006.
+# Override: PHOENIX_COLLECTOR_ENDPOINT (default http://localhost:6006),
+#           CONDUIT_TRACE_PROJECT (default "conduit").
+def _trace_on():
+    return os.environ.get("CONDUIT_TRACE", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+class _NoSpan:
+    """No-op span mirroring Phoenix's OpenInferenceSpan surface; does nothing."""
+    def set_input(self, *a, **k):
+        pass
+
+    def set_output(self, *a, **k):
+        pass
+
+    def set_attribute(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False                # never suppress — let errors propagate
+
+
+class _NoTracer:
+    def start_as_current_span(self, *a, **k):
+        return _NoSpan()
+
+
+def _make_tracer():
+    if not _trace_on():
+        return _NoTracer()
+    project = os.environ.get("CONDUIT_TRACE_PROJECT", "conduit")
+    base = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT",
+                          "http://localhost:6006").rstrip("/")
+    # Pin the OTLP **HTTP** collector explicitly. Left to itself, `register()`
+    # defaults to gRPC on :4317 and IGNORES PHOENIX_COLLECTOR_ENDPOINT, so spans
+    # sail off to a port the UI may not be receiving on — the classic Phoenix
+    # "waiting for traces" with everything else looking fine. The HTTP collector
+    # shares the UI port (:6006) at the /v1/traces path.
+    endpoint = base if base.endswith("/v1/traces") else base + "/v1/traces"
+    try:
+        from phoenix.otel import register
+        # register's default SimpleSpanProcessor flushes each span on end, so a
+        # trace shows up right after the turn — right for low-volume interactive
+        # chat. Passing `endpoint` forces the HTTP+protobuf exporter to it.
+        provider = register(project_name=project, endpoint=endpoint)
+        print(f"[trace] Phoenix tracing ON (project={project}, "
+              f"endpoint={endpoint}); view at {base}")
+        return provider.get_tracer(__name__)
+    except Exception as e:          # noqa: BLE001 - tracing must never break serving
+        print(f"[trace] CONDUIT_TRACE set but Phoenix unavailable ({e}); "
+              "continuing without tracing")
+        return _NoTracer()
+
+
+# Built lazily: main() loads `.env` and rebuilds the real tracer. The import-time
+# value is the no-op shim, so importing the module (e.g. in the unit tests) never
+# starts tracing regardless of the ambient environment.
+TRACER = _NoTracer()
 
 SR = 16000
 MAX_FRAMES = 600          # FaceFormer PPE/biased_mask max_seq_len
@@ -242,6 +340,7 @@ class Brain:
         self.model = model
         self.state = "offline"      # offline | pulling | warming | ready | error
         self.history = []
+        self._last_usage = None     # token counts from the most recent /api/chat
 
     # --- background lifecycle (off the server thread) -------------------
     def warm(self):
@@ -292,6 +391,11 @@ class Brain:
         except json.JSONDecodeError:
             raise OllamaError("ollama returned malformed JSON")
         content = ((obj.get("message") or {}).get("content") or "").strip()
+        # Ollama returns its own token accounting on the non-streamed response;
+        # stash it for the LLM trace span (decision #16). Additive and cheap —
+        # untouched when tracing is off.
+        self._last_usage = {"prompt": obj.get("prompt_eval_count"),
+                            "completion": obj.get("eval_count")}
         if not content:
             raise OllamaError(f"ollama bad/empty response: {str(obj)[:160]}")
         return content
@@ -300,7 +404,25 @@ class Brain:
     def reply(self, text):
         msgs = [{"role": "system", "content": SYSTEM_PROMPT},
                 *self.history, {"role": "user", "content": text}]
-        out = _clamp_for_speech(self._chat(msgs, num_predict=128))
+        # Trace each turn locally (no-op unless CONDUIT_TRACE=1): a `conduit.ask`
+        # chain span (question -> reply) wrapping the `ollama.chat` LLM call.
+        with TRACER.start_as_current_span(
+                "conduit.ask", openinference_span_kind="chain") as ask:
+            ask.set_input(text)
+            with TRACER.start_as_current_span(
+                    "ollama.chat", openinference_span_kind="llm") as llm:
+                llm.set_input(msgs)
+                llm.set_attribute("llm.model_name", self.model)
+                content = self._chat(msgs, num_predict=128)
+                llm.set_output(content)
+                usage = self._last_usage or {}
+                if usage.get("prompt") is not None:
+                    llm.set_attribute("llm.token_count.prompt", usage["prompt"])
+                if usage.get("completion") is not None:
+                    llm.set_attribute("llm.token_count.completion",
+                                      usage["completion"])
+            out = _clamp_for_speech(content)
+            ask.set_output(out)
         self.history += [{"role": "user", "content": text},
                          {"role": "assistant", "content": out}]
         _trim_history(self.history)
@@ -320,7 +442,13 @@ class MockBrain:
         pass
 
     def reply(self, text):
-        out = "Mock brain online. I heard you, but I'm not really thinking yet."
+        # Traced too (no-op unless CONDUIT_TRACE=1), so `make mock` can verify the
+        # Phoenix wiring without Ollama or FaceFormer.
+        with TRACER.start_as_current_span(
+                "conduit.ask", openinference_span_kind="chain") as ask:
+            ask.set_input(text)
+            out = "Mock brain online. I heard you, but I'm not really thinking yet."
+            ask.set_output(out)
         self.history += [{"role": "user", "content": text},
                          {"role": "assistant", "content": out}]
         _trim_history(self.history)
@@ -438,7 +566,74 @@ def make_handler(predictor, tts, tts_name, head, mode, brain):
     return Handler
 
 
+def _port_holders(port):
+    """Best-effort list of (pid, command) LISTENing on `port` (macOS/Linux, via
+    lsof + ps), so an 'address already in use' failure can name the culprit
+    instead of being opaque. Returns [] if lsof is unavailable or nothing matches."""
+    try:
+        r = subprocess.run(["lsof", "-tnP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:                       # lsof missing / sandboxed / timed out
+        return []
+    holders = []
+    for pid in r.stdout.split():
+        if not pid.isdigit():
+            continue
+        try:
+            c = subprocess.run(["ps", "-p", pid, "-o", "command="],
+                               capture_output=True, text=True, timeout=5)
+            cmd = c.stdout.strip()
+        except Exception:
+            cmd = ""
+        holders.append((pid, cmd or "(command unknown)"))
+    return holders
+
+
+def _abort_port_in_use(host, port):
+    """Print WHO holds `port` (PID + full command) and how to free it, then exit.
+    'Address already in use' alone tells you nothing — name the process."""
+    holders = _port_holders(port)
+    lines = [f"ERROR: {host}:{port} is already in use — the speak server can't "
+             "bind there."]
+    if holders:
+        lines.append("Already listening on it:")
+        lines += [f"    PID {pid}  {cmd}" for pid, cmd in holders]
+        pids = " ".join(pid for pid, _ in holders)
+        lines.append("If that's a stale conduit server, free the port with:")
+        lines.append(f"    kill {pids}        (force if needed: kill -9 {pids})")
+    else:
+        lines.append("Couldn't identify the holder (lsof unavailable?). "
+                     "Inspect it with:")
+        lines.append(f"    lsof -nP -iTCP:{port} -sTCP:LISTEN")
+    lines.append(f"The page + desktop shell expect port {port}; freeing it is the "
+                 f"real fix. To bind elsewhere anyway: make serve PORT={port + 1} "
+                 f"(or --port {port + 1}).")
+    sys.exit("\n".join(lines))
+
+
+def _ensure_port_free(host, port):
+    """Fail fast with a named culprit BEFORE the (slow) FaceFormer load if the
+    port is already taken. Mirrors HTTPServer's SO_REUSEADDR so the probe's verdict
+    matches the real bind (no false positive on a lingering TIME_WAIT socket)."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        probe.bind((host, port))
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            _abort_port_in_use(host, port)
+        raise
+    finally:
+        probe.close()
+
+
 def main():
+    # Load the repo `.env` (CONDUIT_TRACE, PHOENIX_COLLECTOR_ENDPOINT, ...) before
+    # anything reads the environment, then build the tracer from the merged env.
+    _load_dotenv(os.path.join(REPO, ".env"))
+    global TRACER
+    TRACER = _make_tracer()
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--faceformer", help="path to the FaceFormer clone")
     ap.add_argument("--mock", action="store_true",
@@ -452,6 +647,10 @@ def main():
     ap.add_argument("--no-llm", action="store_true",
                     help="disable the /ask brain (speech only)")
     args = ap.parse_args()
+
+    # Check the port BEFORE the slow FaceFormer load, so a busy port fails in a
+    # second with a named culprit instead of after a minute of model loading.
+    _ensure_port_free("127.0.0.1", args.port)
 
     head = load_head(args.head)
     if args.mock:
@@ -476,8 +675,13 @@ def main():
         brain = Brain(args.ollama_url, args.model)
         threading.Thread(target=brain.warm, daemon=True).start()
 
-    httpd = HTTPServer(("127.0.0.1", args.port),
-                       make_handler(predictor, tts, tts_name, head, mode, brain))
+    try:
+        httpd = HTTPServer(("127.0.0.1", args.port),
+                           make_handler(predictor, tts, tts_name, head, mode, brain))
+    except OSError as e:                     # lost a race since _ensure_port_free
+        if e.errno == errno.EADDRINUSE:
+            _abort_port_in_use("127.0.0.1", args.port)
+        raise
     brain_desc = "off" if brain is None else f"{getattr(brain, 'model', '?')}"
     print(f"conduit speak server on http://localhost:{args.port} "
           f"(mode={mode}, tts={tts_name}, brain={brain_desc}, "

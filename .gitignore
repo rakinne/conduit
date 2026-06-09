@@ -13,6 +13,9 @@ __pycache__/
 .venv*/
 faceformer/
 
+# local env config (CONDUIT_TRACE, PHOENIX_COLLECTOR_ENDPOINT, ...) — machine-local
+.env
+
 # macOS + downloaded installers (never commit these — caused the aa5bf70 mess)
 .DS_Store
 Miniconda3-*.sh

@@ -136,6 +136,38 @@ class MockBrainTests(unittest.TestCase):
         self.assertEqual(b.state, "ready")
 
 
+class TracingTests(unittest.TestCase):
+    """Local Phoenix tracing must be TRANSPARENT: with CONDUIT_TRACE unset (the
+    default in this test env) TRACER is a no-op shim, so reply() is unaffected and
+    the module imports with no `arize-phoenix`. Also checks the brain stashes
+    Ollama's own token counts for the LLM trace span."""
+
+    def test_no_op_tracer_swallows_span_calls(self):
+        with ss.TRACER.start_as_current_span(
+                "conduit.ask", openinference_span_kind="chain") as s:
+            s.set_input("q")
+            s.set_output("a")
+            s.set_attribute("llm.model_name", "x")
+        # reaching here without error == the shim mirrors OpenInferenceSpan's surface
+
+    def test_no_op_span_does_not_suppress_errors(self):
+        with self.assertRaises(ValueError):
+            with ss.TRACER.start_as_current_span("conduit.ask") as s:
+                s.set_input("q")
+                raise ValueError("boom")          # must propagate, not be swallowed
+
+    def test_chat_records_token_usage(self):
+        fake = FakeOllama()
+        try:
+            fake.chat = {"message": {"content": "Lima."},
+                         "prompt_eval_count": 7, "eval_count": 3}
+            b = ss.Brain(fake.url, "qwen2.5:3b")
+            b.reply("capital of Peru?")
+            self.assertEqual(b._last_usage, {"prompt": 7, "completion": 3})
+        finally:
+            fake.stop()
+
+
 class BrainTests(unittest.TestCase):
     def setUp(self):
         self.fake = FakeOllama()
