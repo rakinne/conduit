@@ -150,7 +150,7 @@ asset).
 Any VOCASET-trained vertex-output model works the same way (CodeTalker,
 etc.) — the only contract is FLAME topology, `(T, 5023, 3)`.
 
-### Environment gotcha (Python 3.12)
+### Environment gotcha (Python 3.10 only, + setuptools<81)
 
 FaceFormer's `requirements.txt` pins 2021-era versions (`scipy==1.7.1`,
 `torch==1.9.0`, `transformers==4.6.1`) with no wheels for Python 3.11/3.12
@@ -165,6 +165,14 @@ in `tools/` automate it:
   one-line patch to `wav2vec.py` (modern `transformers` returns a tuple from
   `feature_projection`), and runs prediction CPU-only, skipping rendering.
   `bash run_faceformer.sh demo/wav/your.wav` → `demo/result/your.npy`.
+
+**`pkg_resources` / `setuptools` trap:** modern setuptools (82+) removed
+`pkg_resources`, which the pinned librosa 0.9.2 still imports — so even a
+correct 3.10 env fails with `No module named 'pkg_resources'` until you
+`pip install "setuptools<81"`. The requirements file now pins it; existing
+envs need that one line. And don't try to install on 3.12/3.13 at all: torch
+2.2.2 has no wheel there, so pip builds from Rust source and dies on a cargo
+`edition2024` error — a red herring; the fix is always Python 3.10.
 
 **Attribution:** head geometry derived from FLAME — T. Li, T. Bolkart,
 M. J. Black, H. Li, J. Romero, *Learning a model of facial shape and

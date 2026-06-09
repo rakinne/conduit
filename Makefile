@@ -15,6 +15,10 @@ PY         ?= python3
 MOCK_VENV  ?= .venv-mock
 MOCK_PY     = $(MOCK_VENV)/bin/python
 FACEFORMER ?= $(HOME)/Downloads/FaceFormer-main
+# The REAL server needs the FaceFormer deps (torch etc.), which live in a
+# Python 3.10 conda env, not system python3. Auto-detect a `faceformer` conda
+# env; override with FF_PY=/path/to/python if yours lives elsewhere.
+FF_PY      ?= $(firstword $(wildcard $(HOME)/miniconda3/envs/faceformer/bin/python $(HOME)/anaconda3/envs/faceformer/bin/python) $(PY))
 
 .DEFAULT_GOAL := help
 .PHONY: help test test-frontend test-all mock-venv mock serve
@@ -47,4 +51,5 @@ mock:
 	$(MOCK_PY) tools/speak_server.py --mock
 
 serve:
-	$(PY) tools/speak_server.py --faceformer $(FACEFORMER)
+	@echo "using FF_PY=$(FF_PY)  (override with FF_PY=... if wrong)"
+	$(FF_PY) tools/speak_server.py --faceformer $(FACEFORMER)

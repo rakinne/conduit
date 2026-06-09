@@ -13,9 +13,11 @@
   routing). Mock server contract (`/ping` `/ask` `/speak`) verified end-to-end
   with numpy+scipy only (`make mock`), no FaceFormer/torch/Ollama.
 
-**Left** (needs the FaceFormer machine or a browser — not blockers to merge)
-- [ ] Real end-to-end on the FaceFormer box: `make serve` + `ollama serve` +
-      `ollama pull qwen2.5:3b`, ask a question, confirm real lips + audio.
+**Left** (browser visual pass + the >20 s path; the real-stack e2e is DONE)
+- [x] Real end-to-end on the FaceFormer box — VERIFIED 2026-06-08: "capital of
+      Peru?" -> qwen2.5:3b "The capital of Peru is Lima." + 61 FaceFormer frames
+      + real `say` audio; follow-up resolved "there" -> Lima (rolling memory
+      works); single-threaded server stayed responsive across turns.
 - [ ] Confirm a real >20 s reply trips the post-TTS `TooLong` guard (mock audio
       is silence, so this only exercises with real `say`).
 - [ ] Browser / desktop-app visual pass: `· THINKING` → `· SPEAKING`,
