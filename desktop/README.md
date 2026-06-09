@@ -55,6 +55,17 @@ the full setup. When the brain is ready the UPLINK bar switches to **ASK** mode;
 otherwise it stays a literal **SPEAK** bar. (Verified end-to-end in mock mode;
 real lips + audio await a run on a FaceFormer machine — see the repo `TODOS.md`.)
 
+**Network surface.** The server binds `127.0.0.1` only (unreachable from the
+network) and restricts CORS to conduit's own origins: a `file://` page (which the
+shell loads, sending `Origin: null`) and `http(s)://localhost`/loopback. Any other
+website you have open is refused the `Access-Control-Allow-Origin` header, so it
+can neither read `/ask` replies nor drive the head — keeping local inference and
+conversation data on the box (decisions #14, #16). Residual: the `null` origin is
+shared by *every* `file://` page, so a hostile local HTML file you open could
+still reach the server; that's a far higher bar than "visit a web page," and the
+loopback bind keeps remote sites out entirely. No auth token — proportionate for a
+single-user loopback tool.
+
 ## How it works
 
 - **`ConduitHead.swift`** — an `NSApplication` accessory app. A borderless

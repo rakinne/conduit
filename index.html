@@ -129,6 +129,8 @@
 <footer><p id="status">FORM 01 · STABLE — MOVE THE CURSOR, IT WATCHES</p></footer>
 <div id="ask-caption" role="status" aria-live="polite"></div>
 <div id="uplink">
+  <!-- maxlength must stay <= speak_server.py MAX_INPUT_CHARS (600); the server
+       rejects longer queries (client kept stricter so this never trips). RI-005 -->
   <input id="uplink-text" type="text" maxlength="400"
          placeholder="TYPE — THE HEAD WILL SPEAK" autocomplete="off">
   <button id="uplink-send">TRANSMIT</button>

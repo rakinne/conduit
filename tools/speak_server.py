@@ -43,6 +43,7 @@ import types
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -151,6 +152,9 @@ TRACER = _NoTracer()
 SR = 16000
 MAX_FRAMES = 600          # FaceFormer PPE/biased_mask max_seq_len
 FPS = 30
+MAX_SECONDS = MAX_FRAMES / FPS   # 20.0 s speech cap — named once so the guard,
+                                 # /ping, the TooLong messages, and the startup
+                                 # banner can't drift (RI-005)
 TRAIN_SUBJECTS = ("FaceTalk_170728_03272_TA FaceTalk_170904_00128_TA "
                   "FaceTalk_170725_00137_TA FaceTalk_170915_00223_TA "
                   "FaceTalk_170811_03274_TA FaceTalk_170913_03279_TA "
@@ -456,14 +460,52 @@ class MockBrain:
 
 
 # --------------------------------------------------------------- server
+# CORS origin policy (RI-004). The server binds 127.0.0.1 (unreachable from the
+# network), but a blanket `Access-Control-Allow-Origin: *` still let ANY website
+# you had open issue cross-origin fetches to /ask — driving the local model AND
+# reading its reply. That's the one hole in the local-only thesis (decisions #14,
+# #16). conduit only ever loads from a file:// page (the desktop shell's
+# loadFileURL / a file:// browser tab, both of which send `Origin: null`) or from
+# http(s)://localhost. Echo the request Origin back as the allow-origin ONLY for
+# those; omit the header otherwise so the browser blocks the cross-origin read.
+# Residual widening: `null` is shared by every file:// page, so this still trusts
+# any local HTML file — small, and bounded by the loopback bind (a remote site
+# can't reach the port at all). No auth token: overkill for a single-user pet.
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _allowed_origin(origin):
+    """The value to echo in Access-Control-Allow-Origin for this request's Origin,
+    or None to omit the header (which blocks the cross-origin read). Allows a
+    file:// page (`Origin: null`) and localhost/loopback http(s) origins only."""
+    if not origin:
+        return None
+    if origin == "null":                 # file:// page (desktop shell / file:// tab)
+        return "null"
+    parts = urlsplit(origin)
+    if parts.scheme in ("http", "https") and parts.hostname in _LOCAL_HOSTS:
+        return origin
+    return None
+
+
 def make_handler(predictor, tts, tts_name, head, mode, brain):
     class Handler(BaseHTTPRequestHandler):
+        def _set_cors(self):
+            """Emit CORS allow headers for a conduit-local Origin only (file:// ->
+            'null', or localhost/loopback http(s)); omit them otherwise so the
+            browser blocks the cross-origin read. Returns the echoed origin or
+            None. Replaces a blanket ACAO:* (RI-004)."""
+            allow = _allowed_origin(self.headers.get("Origin"))
+            if allow is not None:
+                self.send_header("Access-Control-Allow-Origin", allow)
+                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            return allow
+
         def _send(self, code, obj):
             body = json.dumps(obj).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self._set_cors()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -473,7 +515,7 @@ def make_handler(predictor, tts, tts_name, head, mode, brain):
             the clip exceeds the 600-frame / 20 s cap. Does NOT call _send - the
             caller owns the response (shared by /speak, /animate, /ask)."""
             secs = len(samples) / SR
-            if secs > MAX_FRAMES / FPS:
+            if secs > MAX_SECONDS:
                 raise TooLong(secs)
             t1 = time.time()
             frames = predictor.predict(samples)
@@ -490,13 +532,22 @@ def make_handler(predictor, tts, tts_name, head, mode, brain):
             return payload
 
         def do_OPTIONS(self):
-            self._send(200, {})
+            # CORS preflight. Origin-gate it too: emit the allow headers only for a
+            # conduit-local Origin, so a disallowed site's preflight carries no
+            # ACAO and the browser never sends the actual JSON POST. That closes
+            # the blind-trigger vector (driving /ask), not just reply exfiltration.
+            self.send_response(204)
+            if self._set_cors() is not None:
+                self.send_header("Access-Control-Allow-Methods",
+                                 "GET, POST, OPTIONS")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def do_GET(self):
             if self.path == "/ping":
                 self._send(200, {
                     "ok": True, "mode": mode, "tts": tts_name,
-                    "maxSeconds": MAX_FRAMES / FPS,
+                    "maxSeconds": MAX_SECONDS,
                     "brain": brain.state if brain else "offline",
                     "model": getattr(brain, "model", None) if brain else None})
             else:
@@ -549,10 +600,10 @@ def make_handler(predictor, tts, tts_name, head, mode, brain):
                         # the reply WAS produced - deliver it as text, speak nothing
                         return self._send(200, {"reply": reply, "tooLong": True,
                             "error": f"reply was {e.secs:.0f}s of speech; "
-                                     f"cap is {MAX_FRAMES/FPS:.0f}s"})
+                                     f"cap is {MAX_SECONDS:.0f}s"})
                     return self._send(400, {"error":
                         f"audio is {e.secs:.1f}s; FaceFormer caps at "
-                        f"{MAX_FRAMES/FPS:.0f}s per request — shorten the text"})
+                        f"{MAX_SECONDS:.0f}s per request — shorten the text"})
 
                 if reply is not None:
                     payload["reply"] = reply
@@ -685,7 +736,7 @@ def main():
     brain_desc = "off" if brain is None else f"{getattr(brain, 'model', '?')}"
     print(f"conduit speak server on http://localhost:{args.port} "
           f"(mode={mode}, tts={tts_name}, brain={brain_desc}, "
-          f"max {MAX_FRAMES/FPS:.0f}s/request)")
+          f"max {MAX_SECONDS:.0f}s/request)")
     print("open conduit's index.html — the UPLINK bar will appear")
     httpd.serve_forever()
 

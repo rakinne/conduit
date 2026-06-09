@@ -103,7 +103,8 @@ support 8 morph influences (no morphNormals enabled):
 slots 0–3 identities, 4–5 chaos, 6 speech, 7 free. Adding targets beyond
 8 requires custom shader work.
 
-**`tools/speak_server.py` endpoints** (localhost:8765, CORS open for file://):
+**`tools/speak_server.py` endpoints** (localhost:8765, CORS restricted to local
+origins — `file://`/`Origin: null` + localhost/loopback only, not `*`; `_allowed_origin`):
 - `GET /ping` → `{ok, mode, brain, model, maxSeconds}`. `brain` is a status
   enum the page polls: `offline | pulling | warming | ready | error`.
 - `POST /speak {text}` / `POST /animate {wavB64}` → ANIM_DATA-shaped payload +
