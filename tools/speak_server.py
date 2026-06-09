@@ -29,6 +29,7 @@ Usage (plumbing test, no torch/model needed):
 """
 import argparse
 import base64
+import errno
 import io
 import json
 import os
@@ -565,6 +566,67 @@ def make_handler(predictor, tts, tts_name, head, mode, brain):
     return Handler
 
 
+def _port_holders(port):
+    """Best-effort list of (pid, command) LISTENing on `port` (macOS/Linux, via
+    lsof + ps), so an 'address already in use' failure can name the culprit
+    instead of being opaque. Returns [] if lsof is unavailable or nothing matches."""
+    try:
+        r = subprocess.run(["lsof", "-tnP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:                       # lsof missing / sandboxed / timed out
+        return []
+    holders = []
+    for pid in r.stdout.split():
+        if not pid.isdigit():
+            continue
+        try:
+            c = subprocess.run(["ps", "-p", pid, "-o", "command="],
+                               capture_output=True, text=True, timeout=5)
+            cmd = c.stdout.strip()
+        except Exception:
+            cmd = ""
+        holders.append((pid, cmd or "(command unknown)"))
+    return holders
+
+
+def _abort_port_in_use(host, port):
+    """Print WHO holds `port` (PID + full command) and how to free it, then exit.
+    'Address already in use' alone tells you nothing — name the process."""
+    holders = _port_holders(port)
+    lines = [f"ERROR: {host}:{port} is already in use — the speak server can't "
+             "bind there."]
+    if holders:
+        lines.append("Already listening on it:")
+        lines += [f"    PID {pid}  {cmd}" for pid, cmd in holders]
+        pids = " ".join(pid for pid, _ in holders)
+        lines.append("If that's a stale conduit server, free the port with:")
+        lines.append(f"    kill {pids}        (force if needed: kill -9 {pids})")
+    else:
+        lines.append("Couldn't identify the holder (lsof unavailable?). "
+                     "Inspect it with:")
+        lines.append(f"    lsof -nP -iTCP:{port} -sTCP:LISTEN")
+    lines.append(f"The page + desktop shell expect port {port}; freeing it is the "
+                 f"real fix. To bind elsewhere anyway: make serve PORT={port + 1} "
+                 f"(or --port {port + 1}).")
+    sys.exit("\n".join(lines))
+
+
+def _ensure_port_free(host, port):
+    """Fail fast with a named culprit BEFORE the (slow) FaceFormer load if the
+    port is already taken. Mirrors HTTPServer's SO_REUSEADDR so the probe's verdict
+    matches the real bind (no false positive on a lingering TIME_WAIT socket)."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        probe.bind((host, port))
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            _abort_port_in_use(host, port)
+        raise
+    finally:
+        probe.close()
+
+
 def main():
     # Load the repo `.env` (CONDUIT_TRACE, PHOENIX_COLLECTOR_ENDPOINT, ...) before
     # anything reads the environment, then build the tracer from the merged env.
@@ -585,6 +647,10 @@ def main():
     ap.add_argument("--no-llm", action="store_true",
                     help="disable the /ask brain (speech only)")
     args = ap.parse_args()
+
+    # Check the port BEFORE the slow FaceFormer load, so a busy port fails in a
+    # second with a named culprit instead of after a minute of model loading.
+    _ensure_port_free("127.0.0.1", args.port)
 
     head = load_head(args.head)
     if args.mock:
@@ -609,8 +675,13 @@ def main():
         brain = Brain(args.ollama_url, args.model)
         threading.Thread(target=brain.warm, daemon=True).start()
 
-    httpd = HTTPServer(("127.0.0.1", args.port),
-                       make_handler(predictor, tts, tts_name, head, mode, brain))
+    try:
+        httpd = HTTPServer(("127.0.0.1", args.port),
+                           make_handler(predictor, tts, tts_name, head, mode, brain))
+    except OSError as e:                     # lost a race since _ensure_port_free
+        if e.errno == errno.EADDRINUSE:
+            _abort_port_in_use("127.0.0.1", args.port)
+        raise
     brain_desc = "off" if brain is None else f"{getattr(brain, 'model', '?')}"
     print(f"conduit speak server on http://localhost:{args.port} "
           f"(mode={mode}, tts={tts_name}, brain={brain_desc}, "

@@ -19,6 +19,7 @@
 PY         ?= python3
 MOCK_VENV  ?= .venv-mock
 MOCK_PY     = $(MOCK_VENV)/bin/python
+PORT       ?= 8765        # the page + desktop shell expect 8765; override for dev
 FACEFORMER ?= $(HOME)/Downloads/FaceFormer-main
 # The REAL server needs the FaceFormer deps (torch etc.), which live in a
 # Python 3.10 conda env, not system python3. Auto-detect a `faceformer` conda
@@ -57,11 +58,11 @@ mock-venv:
 
 mock:
 	@test -x $(MOCK_PY) || { echo "no mock venv — run 'make mock-venv' first"; exit 1; }
-	$(MOCK_PY) tools/speak_server.py --mock
+	$(MOCK_PY) tools/speak_server.py --mock --port $(PORT)
 
 serve:
 	@echo "using FF_PY=$(FF_PY)  (override with FF_PY=... if wrong)"
-	$(FF_PY) tools/speak_server.py --faceformer $(FACEFORMER)
+	$(FF_PY) tools/speak_server.py --faceformer $(FACEFORMER) --port $(PORT)
 
 # Local-only trace UI (Arize Phoenix). Stores traces on-disk; nothing leaves the
 # machine. The UI needs the FULL `arize-phoenix` in TRACE_PY's env (system python
