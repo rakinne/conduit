@@ -20,37 +20,18 @@ License note: FLAME 2023 Open is CC-BY-4.0 (cite Li et al., SIGGRAPH
 Asia 2017). The pkl itself is gitignored; derived head_data.js ships.
 """
 import base64
+import hashlib
 import json
-import pickle
 import sys
-import types
 
 import numpy as np
+
+from flame_io import load_flame   # shared chumpy-shim FLAME loader (RI-003)
 
 N_SHAPE = 300          # identity components (last 100 are expression)
 N_IDENTITIES = 5
 BETA_CLIP = 3.0        # stay within +/-3 std of the shape space
 SCENE_HEIGHT = 2.05    # world units chin..crown, matches procedural head
-
-# ---------------------------------------------------------------- load
-def load_flame(path):
-    class Ch:
-        def __init__(self, *a, **k): pass
-        def __setstate__(self, state):
-            self.__dict__.update(state if isinstance(state, dict) else {})
-    mod = types.ModuleType('chumpy'); mod.Ch = Ch
-    chm = types.ModuleType('chumpy.ch'); chm.Ch = Ch
-    mod.ch = chm
-    sys.modules.update({'chumpy': mod, 'chumpy.ch': chm, 'chumpy.ch_ops': chm})
-    with open(path, 'rb') as f:
-        d = pickle.load(f, encoding='latin1')
-    def unwrap(v):
-        if isinstance(v, Ch):
-            for key in ('x', 'a', 'v'):
-                if hasattr(v, key):
-                    return np.asarray(getattr(v, key))
-        return v
-    return {k: unwrap(v) for k, v in d.items()}
 
 # ------------------------------------------------- connected components
 def components(n_verts, faces):
@@ -114,8 +95,13 @@ def solve_identities(v_template, shapedirs, head_mask):
         beta_lead = np.clip(beta_lead, -BETA_CLIP, BETA_CLIP)
         beta = np.zeros(N_SHAPE)
         beta[:n_pc] = beta_lead
-        # sprinkle mid-band character so faces differ beyond gross metrics
-        rng = np.random.default_rng(abs(hash(name)) % 2**32)
+        # sprinkle mid-band character so faces differ beyond gross metrics.
+        # Seed from a STABLE hash of the name: Python's built-in hash() of a str
+        # is salted per process (PYTHONHASHSEED), which made the bake — and the
+        # committed head_data.js — non-reproducible. sha256 is process-independent
+        # so re-running the converter is byte-stable (RI-001).
+        seed = int.from_bytes(hashlib.sha256(name.encode()).digest()[:4], "big")
+        rng = np.random.default_rng(seed)
         beta[n_pc:60] = np.clip(rng.normal(0, 0.9, 60 - n_pc), -2, 2)
         out.append((name, beta))
     return out

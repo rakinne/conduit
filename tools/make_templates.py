@@ -15,9 +15,10 @@ Then copy templates.pkl to FaceFormer/vocaset/templates.pkl
 """
 import pickle
 import sys
-import types
 
 import numpy as np
+
+from flame_io import load_flame   # shared chumpy-shim FLAME loader (RI-003)
 
 SUBJECTS = [
     # train
@@ -33,15 +34,7 @@ SUBJECTS = [
 
 
 def main(flame_pkl, out_path):
-    class Ch:
-        def __init__(self, *a, **k): pass
-        def __setstate__(self, s):
-            self.__dict__.update(s if isinstance(s, dict) else {})
-    m = types.ModuleType('chumpy'); m.Ch = Ch
-    c = types.ModuleType('chumpy.ch'); c.Ch = Ch; m.ch = c
-    sys.modules.update({'chumpy': m, 'chumpy.ch': c, 'chumpy.ch_ops': c})
-    with open(flame_pkl, 'rb') as f:
-        d = pickle.load(f, encoding='latin1')
+    d = load_flame(flame_pkl)
     v = np.asarray(d['v_template'], np.float64)
     assert v.shape == (5023, 3), v.shape
     templates = {name: v for name in SUBJECTS}
