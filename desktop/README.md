@@ -34,6 +34,7 @@ Requires the Swift toolchain (Xcode or Command Line Tools). macOS 11+.
 | **Reset position** | menu-bar `◉` → *Reset Position* |
 | **Quit** | menu-bar `◉` → *Quit* |
 | **Speak** (if a clip is baked) | grab, then `SPACE`; or run the UPLINK server and type |
+| **Ask** (local LLM) | run the UPLINK server + Ollama, grab, then type a question — the head answers aloud |
 
 **Click-through is the default.** Mouse clicks pass straight through to whatever
 is behind the head, so it never blocks your work — it just floats there and
@@ -42,6 +43,17 @@ to it; click away (or `⌥⌘H` again) and it returns to click-through.
 
 The window position and opacity persist across launches (UserDefaults). There's
 no Dock icon — the app lives in the menu bar (`LSUIElement`).
+
+## Speech and the LLM brain
+
+`SPACE` plays a baked clip. For live speech — or to **ask the head questions** —
+run the UPLINK server (`tools/speak_server.py`) on localhost; the bundle's
+`Info.plist` already permits `http://localhost` (`NSAllowsLocalNetworking`), so
+no extra config is needed. The `/ask` brain additionally needs Ollama running
+with a small model pulled. See the repo README's *"Ask the head"* section for
+the full setup. When the brain is ready the UPLINK bar switches to **ASK** mode;
+otherwise it stays a literal **SPEAK** bar. (Verified end-to-end in mock mode;
+real lips + audio await a run on a FaceFormer machine — see the repo `TODOS.md`.)
 
 ## How it works
 
