@@ -18,14 +18,16 @@ function extract(re, label) {
   return m[0];
 }
 
-// uplinkEndpoint is one line; uplinkPlaceholder spans to a brace at line start.
+// uplinkEndpoint is one line; the others span to a brace at line start.
 const src =
   extract(/function uplinkEndpoint\(brain\)\{[^\n]*\}/, "uplinkEndpoint") +
   "\n" +
   extract(/function uplinkPlaceholder\(brain\)\{[\s\S]*?\n\}/, "uplinkPlaceholder") +
-  "\nreturn { uplinkEndpoint, uplinkPlaceholder };";
+  "\n" +
+  extract(/function brainCaption\(brain, model\)\{[\s\S]*?\n\}/, "brainCaption") +
+  "\nreturn { uplinkEndpoint, uplinkPlaceholder, brainCaption };";
 
-const { uplinkEndpoint, uplinkPlaceholder } = new Function(src)();
+const { uplinkEndpoint, uplinkPlaceholder, brainCaption } = new Function(src)();
 
 let pass = 0;
 const check = (cond, msg) => { assert.ok(cond, msg); pass++; };
@@ -42,5 +44,14 @@ check(uplinkPlaceholder("warming").includes("LOADING"), "warming shows LOADING")
 check(uplinkPlaceholder("pulling").includes("LOADING"), "pulling shows LOADING");
 const off = uplinkPlaceholder("offline");
 check(!off.includes("ASK") && !off.includes("LOADING"), "offline = literal speak copy");
+
+// --- brainCaption: every brain state maps to a visible caption + kind --------
+check(brainCaption("ready", "qwen2.5:3b").text.startsWith("BRAIN ONLINE"), "ready -> BRAIN ONLINE");
+check(brainCaption("ready", "qwen2.5:3b").text.includes("qwen2.5:3b"), "ready caption names the model");
+check(brainCaption("ready", null).text === "BRAIN ONLINE", "ready w/o model = no suffix");
+check(brainCaption("warming").kind === "loading" && brainCaption("warming").text.includes("LOADING"), "warming -> loading");
+check(brainCaption("offline").text === "BRAIN OFFLINE" && brainCaption("offline").kind === "offline", "offline mapping");
+check(brainCaption("error").text === "BRAIN OFFLINE", "error -> visible offline caption (not silent)");
+check(brainCaption("none").text === "UPLINK ONLINE", "none -> speech-only UPLINK ONLINE");
 
 console.log(`ok - ${pass} frontend assertions passed`);
