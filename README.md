@@ -93,6 +93,52 @@ expect inference to take roughly real-time-or-slower on CPU. The uplink
 only works from pages served over http/file (an https page can't call
 http://localhost — mixed content).
 
+### Ask the head (local LLM brain)
+
+The same UPLINK server can give the head a *brain*: with a local LLM running, a
+typed question is **answered aloud** instead of just read back. No cloud API, no
+per-token cost, fully offline and private.
+
+It runs on **Ollama** with a small open model (default `qwen2.5:3b`, ~2–3 GB,
+swap with `--model`):
+
+    ollama pull qwen2.5:3b            # once
+    ollama serve                      # if not already running
+    python3 tools/speak_server.py --faceformer ~/Downloads/FaceFormer-main
+
+`speak_server` adds a `POST /ask {text}` endpoint that generates a short reply
+(1–2 sentences, clamped to the 20 s speech cap), then speaks it through the
+FaceFormer pipeline. It keeps a short rolling conversation memory, warms the
+model on a background thread (the first pull is multi-GB, and the server stays
+responsive throughout), and reports a brain status via `/ping`
+(`offline`/`pulling`/`warming`/`ready`/`error`). `--no-llm` disables it;
+`--mock` exercises the whole `/ask`→speak loop with no model or torch.
+
+Rejected alternatives (and why): **Haiku** (cloud-only, not downloadable),
+**GLM-5.1** (744B params — far too big to run on a desktop), **in-browser
+WebLLM** (WKWebView has no WebGPU, so the desktop app would stay brainless), and
+**OpenClaw** (its intelligence is Claude over the cloud API — breaks the no-API
+constraint).
+
+When the brain is ready the UPLINK bar switches to **ASK** mode (placeholder
+`ASK THE HEAD`); while it warms, or with `--no-llm`, it stays a literal **SPEAK**
+bar — the mode is shown in the placeholder/button and never silently swapped.
+
+**Status:** server (`/ask`) and page (UPLINK) are wired and tested —
+`make test-all` (27 assertions: brain + frontend routing) and the full
+`/ping`/`/ask`/`/speak` contract verified end-to-end in mock mode (`make mock`,
+numpy+scipy only). Real lips + audio await a run on a FaceFormer machine; see
+`TODOS.md`.
+
+#### Dev harness
+
+A `Makefile` runs the backend on any machine, with or without FaceFormer:
+
+    make test-all   # brain + frontend tests (no heavy deps)
+    make mock-venv  # one-time: minimal numpy+scipy venv
+    make mock       # run the /ask -> speak loop in mock mode
+    make serve FACEFORMER=~/Downloads/FaceFormer-main   # the real thing
+
 `bake_anim.js` output is sparse: verts whose peak motion is below
 `--min-move` (default 0.3 mm — invisible at typical view size) are dropped,
 which cuts file size ~40% with 99.7% of motion energy retained. A baked

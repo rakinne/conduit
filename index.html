@@ -321,24 +321,22 @@ function makeEye(){
     new THREE.MeshBasicMaterial({color:0x000000})
   );
   eye.add(socket);
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.95, 1.22, 48),
-    new THREE.MeshBasicMaterial({
-      color:0x00ff88, transparent:true, opacity:0.35,
-      side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false
-    })
-  );
-  eye.add(ring);
-  eye.userData = {socket, ring};
+  eye.userData = {socket};      // just the hollow void — no glow ring/halo
   return eye;
 }
 const eyeL = makeEye(), eyeR = makeEye();
 headGroup.add(eyeL, eyeR);
 
+/* The mouth was a separate dark slit prop, but with only a single rig anchor
+   (no lip contour) it never sat cleanly on the lips across the morphing
+   identities — it read as a wonky floating line. Off by default; FLAME's own
+   lips in the LED skin carry the mouth. Flip to true to restore the slit. */
+const SHOW_MOUTH_SLIT = false;
 const mouth = new THREE.Mesh(
   new THREE.SphereGeometry(1, 24, 24),
   new THREE.MeshBasicMaterial({color:0x000300})
 );
+mouth.visible = SHOW_MOUTH_SLIT;
 headGroup.add(mouth);
 
 const lerp = (a,b,t)=>a+(b-a)*t;
@@ -355,15 +353,13 @@ function applyRig(ai, bi, t, jit){
                      c[2]);
     const s = r*1.35;                       // overfill the socket -> void
     eye.userData.socket.scale.setScalar(s);
-    eye.userData.ring.scale.setScalar(r*1.6);
-    eye.userData.ring.position.z = r*1.05;
     eye.rotation.y = Math.sign(c[0])*0.28;
-    eye.userData.ring.material.opacity =
-      0.35 + (jit>0 ? (Math.random()-.5)*0.3*jit : 0);
   });
-  const m = lerp3(A.mouth, B.mouth, t);
-  mouth.scale.set(0.16, 0.020 + jit*0.02*Math.random(), 0.05);
-  mouth.position.set(m[0] + (Math.random()-.5)*jit*.04, m[1], m[2] + 0.015);
+  if(SHOW_MOUTH_SLIT){
+    const m = lerp3(A.mouth, B.mouth, t);
+    mouth.scale.set(0.16, 0.020 + jit*0.02*Math.random(), 0.05);
+    mouth.position.set(m[0] + (Math.random()-.5)*jit*.04, m[1], m[2] + 0.015);
+  }
 }
 applyRig(0, 0, 0, 0);
 
@@ -486,7 +482,7 @@ function stopSpeech(){
   if(!speech) return;
   speech.playing = false;
   speech.attr.array.fill(0); speech.attr.needsUpdate = true;
-  mouth.visible = true;
+  mouth.visible = SHOW_MOUTH_SLIT;
   if(speech.audio) speech.audio.pause();
   statusEl.textContent = `FORM ${IDENTITY_NAMES[curId]} · STABLE`;
 }
@@ -501,40 +497,87 @@ if(speech){
   document.getElementById('status').textContent += ' — [SPACE] SPEAKS';
 }
 
-/* --- UPLINK: on-the-fly speech via tools/speak_server.py ------------
-   The server runs on the user's machine; if it answers /ping, the
-   input bar appears. Note: a page served over httpS cannot call
-   http://localhost (mixed content) — open index.html locally instead. */
+/* --- UPLINK: on-the-fly speech + local-LLM brain (tools/speak_server.py) -
+   The server runs on the user's machine; if it answers /ping the input bar
+   appears. /ping reports a brain status enum (offline|pulling|warming|ready|
+   error). When the brain is READY the bar ASKS (routes /ask, the head answers
+   the question); otherwise it SPEAKS the literal text (routes /speak). The
+   mode is shown in the placeholder + button and re-checked at send time, so a
+   question is never silently spoken back. Note: an httpS page cannot call
+   http://localhost (mixed content) — open index.html locally / via the shell. */
 const UPLINK = 'http://localhost:8765';
 const uplinkEl = document.getElementById('uplink');
 const uplinkText = document.getElementById('uplink-text');
 const uplinkSend = document.getElementById('uplink-send');
-fetch(UPLINK + '/ping').then(r=>r.json()).then(j=>{
-  if(j.ok){
-    uplinkEl.style.display = 'flex';
-    statusEl.textContent += ` — UPLINK ONLINE (${j.mode})`;
-  }
-}).catch(()=>{});
+
+let uplink = { online:false, brain:'none', model:null, announced:false };
+
+// pure helpers (unit-tested headlessly in Node): endpoint + bar copy per state
+function uplinkEndpoint(brain){ return brain === 'ready' ? '/ask' : '/speak'; }
+function uplinkPlaceholder(brain){
+  if(brain === 'ready') return 'ASK THE HEAD';
+  if(brain === 'pulling' || brain === 'warming') return 'BRAIN LOADING… type to speak';
+  return 'TYPE — THE HEAD WILL SPEAK';
+}
+
+function applyUplinkUI(){
+  uplinkEl.style.display = uplink.online ? 'flex' : 'none';
+  if(!uplink.online) return;
+  uplinkText.placeholder = uplinkPlaceholder(uplink.brain);
+  uplinkSend.textContent = uplink.brain === 'ready' ? 'ASK' : 'TRANSMIT';
+}
+
+async function pingUplink(){
+  try{
+    const j = await (await fetch(UPLINK + '/ping')).json();
+    if(!j.ok) return;
+    uplink.online = true;
+    uplink.brain = j.brain || 'none';      // older servers omit brain -> speak-only
+    uplink.model = j.model || null;
+    if(!uplink.announced){
+      uplink.announced = true;
+      const m = uplink.model ? ` (${uplink.model})` : '';
+      statusEl.textContent += uplink.brain === 'ready'
+        ? ` — BRAIN ONLINE${m}` : ` — UPLINK ONLINE (${j.mode})`;
+    }
+    applyUplinkUI();
+    if(uplink.brain === 'pulling' || uplink.brain === 'warming')
+      setTimeout(pingUplink, 3000);        // poll until the brain warms, then flip live
+  }catch(e){ /* server not running; bar stays hidden */ }
+}
+pingUplink();
+
 async function transmit(){
   const text = uplinkText.value.trim();
   if(!text || uplinkSend.disabled) return;
+  const ask = uplink.brain === 'ready';    // re-checked at send time, never silent
   uplinkSend.disabled = true;
   const prev = statusEl.textContent;
-  statusEl.textContent = 'SYNTHESIZING …';
+  statusEl.textContent = ask ? '· THINKING …' : 'SYNTHESIZING …';
   statusEl.classList.add('resequencing');
   try{
-    const r = await fetch(UPLINK + '/speak', {
+    const r = await fetch(UPLINK + uplinkEndpoint(uplink.brain), {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({text})});
-    const p = await r.json();
-    if(!r.ok) throw new Error(p.error || r.status);
+    const p = await r.json().catch(()=>({}));
+    if(!r.ok){
+      if(p.brain){ uplink.brain = p.brain; applyUplinkUI(); }   // e.g. 503 brain warming
+      throw new Error(p.error || ('HTTP ' + r.status));
+    }
+    if(p.tooLong){                         // reply produced but too long to speak
+      statusEl.classList.remove('resequencing');
+      statusEl.textContent = '· ' + (p.reply || 'reply too long to speak');
+      uplinkText.value = '';
+      setTimeout(()=>{ statusEl.textContent = prev; }, 6000);
+      return;
+    }
     loadSpeech(p, p.audioB64 ? 'data:audio/wav;base64,' + p.audioB64 : null);
     statusEl.classList.remove('resequencing');
-    startSpeech();
+    startSpeech();                          // sets · SPEAKING
     uplinkText.value = '';
   }catch(err){
     statusEl.classList.remove('resequencing');
-    statusEl.textContent = 'UPLINK ERROR: ' + err.message;
+    statusEl.textContent = (ask ? 'BRAIN ERROR: ' : 'UPLINK ERROR: ') + err.message;
     setTimeout(()=>{ statusEl.textContent = prev; }, 4000);
   }finally{
     uplinkSend.disabled = false;

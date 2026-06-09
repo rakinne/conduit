@@ -1,0 +1,6 @@
+# Minimal deps to run `speak_server.py --mock` and exercise the /ask -> speak
+# loop WITHOUT FaceFormer or torch. numpy drives the mock predictor + bake;
+# scipy writes the wav. (Real inference additionally needs the FaceFormer clone
+# env: torch, transformers, librosa — see tools/requirements-faceformer-py310.txt.)
+numpy
+scipy

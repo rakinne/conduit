@@ -18,12 +18,19 @@ in the style of The Black Eyed Peas' *The E.N.D.* album cover. The head:
   mid-morph (the reference: a face-A → boiling smear → face-B GIF)
 - **speaks**: plays back speech-driven facial animation (FaceFormer)
   synced to audio, composing with everything above
+- **answers**: a local LLM brain (Ollama + a small model) turns a typed
+  question into a short spoken reply through the speech path above — no
+  cloud API. Server (`/ask`) + page (UPLINK) wired; verified end-to-end in
+  mock mode. Real lips/audio await a run on the FaceFormer machine (see
+  `TODOS.md`).
 
 ## Branches
 
 - `main` — original procedural head (sphere sculpt, self-contained)
-- `feature/flame-integration` — current work: head is the FLAME 2023
-  Open statistical model; adds the offline-bake pipelines below
+- `feature/flame-integration` — head is the FLAME 2023 Open statistical
+  model; adds the offline-bake pipelines below
+- `feature/desktop-overlay` — current work: native macOS shell + the
+  local-LLM `/ask` brain
 
 ## File map
 
@@ -38,6 +45,12 @@ in the style of The Black Eyed Peas' *The E.N.D.* album cover. The head:
 | `tools/templates.pkl` | pre-generated output of the above |
 | `tools/run_faceformer.sh` | env setup + patched CPU inference on the user's machine |
 | `tools/requirements-faceformer-py310.txt` | relaxed FaceFormer deps for Python 3.10 |
+| `tools/speak_server.py` | localhost server: typed text → speech (`/speak`) **and** query → spoken answer (`/ask`, local LLM via Ollama) |
+| `tools/test_speak_ask.py` | unit tests for the `/ask` brain (stubs numpy + Ollama; runs in any env) |
+| `tools/test_frontend.mjs` | headless Node test of `index.html`'s UPLINK routing (`/ask` only when brain ready) |
+| `tools/requirements-mock.txt` | numpy+scipy — the minimal env to run `--mock` without FaceFormer |
+| `Makefile` | repeatable dev harness: `make test` / `test-frontend` / `mock-venv` / `mock` / `serve` |
+| `TODOS.md` | remaining `/ask` validation + the future Docker/repeatability phase |
 | `desktop/ConduitHead.swift` | native macOS shell — floating, transparent, always-on-top head |
 | `desktop/build.sh` | builds `ConduitHead.app` (vendors three.js, rewrites src, compiles Swift) |
 | `desktop/README.md` | desktop shell usage + tuning |
@@ -54,6 +67,12 @@ python3 tools/bake_anim.py prediction.npy --fps 30 --wav speech.wav
 
 # on the user's machine, inside a FaceFormer clone:
 bash run_faceformer.sh demo/wav/your.wav   # → demo/result/your.npy
+
+# speech + LLM brain server, via the Makefile dev harness:
+# /ask needs Ollama running; pull a small model once: `ollama pull qwen2.5:3b`
+make serve FACEFORMER=~/Downloads/FaceFormer-main   # real server (faceformer env)
+make mock-venv && make mock                         # mock loop: no FaceFormer/torch/Ollama
+make test-all                                       # brain + frontend tests (no heavy deps)
 ```
 
 ## Key integration contracts
@@ -82,6 +101,18 @@ bash run_faceformer.sh demo/wav/your.wav   # → demo/result/your.npy
 support 8 morph influences (no morphNormals enabled):
 slots 0–3 identities, 4–5 chaos, 6 speech, 7 free. Adding targets beyond
 8 requires custom shader work.
+
+**`tools/speak_server.py` endpoints** (localhost:8765, CORS open for file://):
+- `GET /ping` → `{ok, mode, brain, model, maxSeconds}`. `brain` is a status
+  enum the page polls: `offline | pulling | warming | ready | error`.
+- `POST /speak {text}` / `POST /animate {wavB64}` → ANIM_DATA-shaped payload +
+  `audioB64`. `POST /ask {text}` → same payload **plus** `reply`; requires
+  `brain == "ready"` (else 503), 502 on an Ollama error.
+- All three share `Handler._synthesize(samples, source, tts_s)`, which returns
+  the payload and raises `TooLong` past the 600-frame/20s cap (the caller
+  sends). `/ask` length safety is **two layers**: a word pre-clamp AND the
+  post-TTS duration guard — word count is not a duration proxy. On too-long,
+  `/ask` returns `{reply, tooLong:true}` (text delivered, nothing spoken).
 
 ## Key decisions (chronological, with rationale)
 
@@ -148,6 +179,27 @@ slots 0–3 identities, 4–5 chaos, 6 speech, 7 free. Adding targets beyond
     sessions are byte-for-byte unaffected (the gate is false). **New
     integration contract**: keep these three globals stable — the Swift
     shell calls them by name.
+14. **Query answering = local LLM, no cloud API.** A small open model
+    (default `qwen2.5:3b`) runs under **Ollama** on localhost; the head
+    answers typed questions aloud through the existing speech path. Rejected:
+    **Haiku** (cloud-only, can't be downloaded/run local), **GLM-5.1** (744B
+    MoE, ~176 GB even quantized — "cheap to call in the cloud" ≠ "small enough
+    to run local"), **in-browser WebLLM/WebGPU** (WKWebView ships no WebGPU,
+    so the *desktop* pet would stay brainless), and **OpenClaw as the brain**
+    (it orchestrates Claude Code over the Anthropic cloud API — breaks the
+    no-API constraint, and heavyweight agent turns are the wrong shape for
+    snappy ≤20s replies). The brain is a *responder* inserted into the
+    existing `speak_server` UPLINK pattern, not a new service.
+15. **Brain runtime contract (Codex-hardened).** The model warms on a
+    **background daemon thread** so a multi-GB first pull never blocks the
+    single-threaded `HTTPServer` (which must answer `/ping` at once);
+    `brain_state` is the one cross-thread flag. Ollama is reached via stdlib
+    `urllib` with **explicit timeouts** + response-shape validation, and `say`
+    runs under a subprocess timeout — on a single-threaded server any hang
+    freezes the whole UPLINK. History is a rolling window bounded by BOTH
+    turns (~6) and chars. When the brain is not `ready`, the page must show
+    `BRAIN OFFLINE/LOADING` and disable ask — it must NOT silently speak the
+    user's question back (that was the original glib "fall back to /speak").
 
 ## Conventions & gotchas
 
@@ -162,4 +214,10 @@ slots 0–3 identities, 4–5 chaos, 6 speech, 7 free. Adding targets beyond
 - `test.wav` (FaceFormer's demo audio) is deliberately not committed.
 - Serve `*_data.js` gzipped in production; int16 base64 compresses ~4×.
 - Status line vocabulary: `FORM XX · STABLE` / `RESEQUENCING → FORM XX`
-  / `· SPEAKING`. Keep the register.
+  / `· SPEAKING` / `· THINKING` / `BRAIN ONLINE (model)` / `BRAIN LOADING`
+  / `BRAIN OFFLINE` / `BRAIN ERROR: …`. Keep the register.
+- The `/ask` brain is optional: `--no-llm` disables it, and the page stays
+  speech-only if `brain` never reaches `ready`. It needs Ollama running
+  locally (`ollama serve`) with the model pulled (`ollama pull qwen2.5:3b`).
+  An `https` page can't call `http://localhost` (mixed content) — open the
+  page from `file://`/`http`, which the desktop shell does.

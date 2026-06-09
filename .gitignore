@@ -3,3 +3,16 @@ assets/*.pkl
 # desktop shell — build output + downloadable vendored lib
 desktop/build/
 desktop/vendor/
+
+# python bytecode + codex session scratch
+__pycache__/
+*.pyc
+.context/
+
+# local dev/test virtualenvs
+.venv*/
+faceformer/
+
+# macOS + downloaded installers (never commit these — caused the aa5bf70 mess)
+.DS_Store
+Miniconda3-*.sh
