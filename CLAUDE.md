@@ -49,7 +49,8 @@ in the style of The Black Eyed Peas' *The E.N.D.* album cover. The head:
 | `tools/test_speak_ask.py` | unit tests for the `/ask` brain (stubs numpy + Ollama; runs in any env) |
 | `tools/test_frontend.mjs` | headless Node test of `index.html`'s UPLINK routing (`/ask` only when brain ready) |
 | `tools/requirements-mock.txt` | numpy+scipy — the minimal env to run `--mock` without FaceFormer |
-| `Makefile` | repeatable dev harness: `make test` / `test-frontend` / `mock-venv` / `mock` / `serve` |
+| `tools/requirements-phoenix.txt` | optional dep for LOCAL `/ask` conversation tracing (Arize Phoenix) |
+| `Makefile` | repeatable dev harness: `make test` / `test-frontend` / `mock-venv` / `mock` / `serve` / `trace-ui` |
 | `TODOS.md` | remaining `/ask` validation + the future Docker/repeatability phase |
 | `desktop/ConduitHead.swift` | native macOS shell — floating, transparent, always-on-top head |
 | `desktop/build.sh` | builds `ConduitHead.app` (vendors three.js, rewrites src, compiles Swift) |
@@ -200,6 +201,22 @@ slots 0–3 identities, 4–5 chaos, 6 speech, 7 free. Adding targets beyond
     turns (~6) and chars. When the brain is not `ready`, the page must show
     `BRAIN OFFLINE/LOADING` and disable ask — it must NOT silently speak the
     user's question back (that was the original glib "fall back to /speak").
+16. **Observability = LOCAL tracing only (Arize Phoenix), never cloud.** The
+    `/ask` conversation can be traced for observability, but the trace data — the
+    user's questions + the head's replies — must stay on the machine. This
+    extends #14's local-only *inference* ethos to *telemetry*. **Rejected
+    LangSmith**: both the cloud SaaS (conversation logs would leave the box) and
+    self-hosting it (too heavyweight). Phoenix runs a localhost collector
+    (`:6006`), stores traces on-disk, needs no account, speaks OpenTelemetry/
+    OpenInference. Integration is **opt-in and inert by default**: `CONDUIT_TRACE=1`
+    (exported, or in the repo `.env` — the server loads it at startup via a tiny
+    stdlib loader, no python-dotenv) turns it on; otherwise (or with
+    `arize-phoenix` absent) `TRACER` is a no-op
+    shim and the brain stays a stdlib-only, no-extra-dep path — tests import the
+    module with stdlib alone. Each turn is a `conduit.ask` chain span
+    (question→reply) wrapping an `ollama.chat` LLM span (model + token counts from
+    Ollama's own `/api/chat` accounting). Override the collector with
+    `PHOENIX_COLLECTOR_ENDPOINT`, the project name with `CONDUIT_TRACE_PROJECT`.
 
 ## Conventions & gotchas
 
@@ -212,6 +229,23 @@ slots 0–3 identities, 4–5 chaos, 6 speech, 7 free. Adding targets beyond
   (and audio as a data URI) into `index.html` — keep the script-src lines
   exactly as-is; the build does string replacement on them.
 - `test.wav` (FaceFormer's demo audio) is deliberately not committed.
+- Local `/ask` tracing is opt-in: `CONDUIT_TRACE=1` (set it in the repo `.env`,
+  auto-loaded by the server, or export it) traces each turn to a localhost Arize
+  Phoenix collector. Off by default, no cloud, no-op without the client package
+  (decision #16). The endpoint alone (`PHOENIX_COLLECTOR_ENDPOINT`) does nothing
+  without `CONDUIT_TRACE`. View at http://localhost:6006. Gotchas that cause a
+  silent "waiting for traces":
+  - **`phoenix.otel.register()` defaults to gRPC on `:4317` and ignores
+    `PHOENIX_COLLECTOR_ENDPOINT`.** `_make_tracer` pins the HTTP collector
+    explicitly (`http://localhost:6006/v1/traces`) so spans hit the same port as
+    the UI. Don't "simplify" that back to a bare `register(project_name=...)`.
+  - **Packaging is split.** The *server* only needs the light client
+    `arize-phoenix-otel` (`tools/requirements-phoenix.txt`; `make trace-deps`
+    installs it into the mock venv — the faceformer conda env usually already has
+    phoenix). The *UI* needs the full `arize-phoenix` (`make trace-ui`, run from
+    system python). If the startup log says `Phoenix unavailable`, the client is
+    missing from *that* env; if no `[trace]` line prints at all, `CONDUIT_TRACE`
+    isn't set.
 - Serve `*_data.js` gzipped in production; int16 base64 compresses ~4×.
 - Status line vocabulary: `FORM XX · STABLE` / `RESEQUENCING → FORM XX`
   / `· SPEAKING` / `· THINKING` / `BRAIN ONLINE (model)` / `BRAIN LOADING`
