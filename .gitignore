@@ -19,3 +19,8 @@ faceformer/
 # macOS + downloaded installers (never commit these — caused the aa5bf70 mess)
 .DS_Store
 Miniconda3-*.sh
+
+# refactoring stuff
+refactoring_improvements_N.md
+
+.claude/
