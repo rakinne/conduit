@@ -67,3 +67,20 @@ Caveats to resolve (see CLAUDE.md decisions #14–15):
 - [ ] **FaceFormer weights** (`vocaset.pth`, gitignored; upstream links have
       rotted): mount at runtime, do not bake into the image (licensing + size).
 - [ ] GPU passthrough for Linux+NVIDIA hosts (Ollama, optionally FaceFormer).
+
+## Deferred cleanup (needs the FLAME box / artifact regen)
+
+Surviving items from the old refactoring registry (now deleted — its other
+entries shipped in PRs #8/#9). Both touch generators whose committed output
+can't be regenerated in the dev sandbox, so they're batched for a
+FaceFormer-machine session.
+
+- [ ] De-dup the FaceFormer compat shims + speaker constants shared verbatim by
+      `tools/speak_server.py` and `tools/run_faceformer.sh` (was RI-002): extract
+      a server-side `tools/ff_compat.py`; keep `run_faceformer.sh`'s inline copy
+      with a `# MIRROR OF tools/ff_compat.py — keep in sync` header (it must stay
+      standalone inside a foreign FaceFormer clone).
+- [ ] `tools/convert_flame.py`: replace the hand-rolled `components()` union-find
+      with `scipy.sparse.csgraph.connected_components`. Downstream code is
+      label-agnostic (sorts components by size), so `head_data.js` should be
+      byte-identical — confirm with a regenerate-and-diff on the FLAME box.
