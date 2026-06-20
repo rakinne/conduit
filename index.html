@@ -348,22 +348,14 @@ function makeEye(){
 const eyeL = makeEye(), eyeR = makeEye();
 headGroup.add(eyeL, eyeR);
 
-/* The mouth was a separate dark slit prop, but with only a single rig anchor
-   (no lip contour) it never sat cleanly on the lips across the morphing
-   identities — it read as a wonky floating line. Off by default; FLAME's own
-   lips in the LED skin carry the mouth. Flip to true to restore the slit. */
-const SHOW_MOUTH_SLIT = false;
-const mouth = new THREE.Mesh(
-  new THREE.SphereGeometry(1, 24, 24),
-  new THREE.MeshBasicMaterial({color:0x000300})
-);
-mouth.visible = SHOW_MOUTH_SLIT;
-headGroup.add(mouth);
+/* No separate mouth prop: FLAME's own lips in the LED skin carry the mouth.
+   (A single-anchor dark slit never sat cleanly across the morphing identities —
+   it read as a wonky floating line.) */
 
 const lerp = (a,b,t)=>a+(b-a)*t;
 const lerp3 = (a,b,t)=>[lerp(a[0],b[0],t), lerp(a[1],b[1],t), lerp(a[2],b[2],t)];
 
-/* place eye/mouth props for a blend between two identity rigs */
+/* place the void-eye props for a blend between two identity rigs */
 function applyRig(ai, bi, t, jit){
   const A = RIGS[ai], B = RIGS[bi];
   [[eyeL,'eyeL'],[eyeR,'eyeR']].forEach(([eye,k])=>{
@@ -376,11 +368,6 @@ function applyRig(ai, bi, t, jit){
     eye.userData.socket.scale.setScalar(s);
     eye.rotation.y = Math.sign(c[0])*0.28;
   });
-  if(SHOW_MOUTH_SLIT){
-    const m = lerp3(A.mouth, B.mouth, t);
-    mouth.scale.set(0.16, 0.020 + jit*0.02*Math.random(), 0.05);
-    mouth.position.set(m[0] + (Math.random()-.5)*jit*.04, m[1], m[2] + 0.015);
-  }
 }
 applyRig(0, 0, 0, 0);
 
@@ -495,7 +482,6 @@ function updateSpeech(t){
 function startSpeech(){
   if(!speech) return;
   speech.playing = true; speech.t0 = performance.now();
-  mouth.visible = false;                 // FLAME's real lips take over
   if(speech.audio){ speech.audio.currentTime = 0; speech.audio.play().catch(()=>{}); }
   statusEl.textContent = `FORM ${IDENTITY_NAMES[curId]} · SPEAKING`;
 }
@@ -503,7 +489,6 @@ function stopSpeech(){
   if(!speech) return;
   speech.playing = false;
   speech.attr.array.fill(0); speech.attr.needsUpdate = true;
-  mouth.visible = SHOW_MOUTH_SLIT;
   if(speech.audio) speech.audio.pause();
   statusEl.textContent = `FORM ${IDENTITY_NAMES[curId]} · STABLE`;
 }

@@ -10,8 +10,8 @@ in the style of The Black Eyed Peas' *The E.N.D.* album cover. The head:
 
 - wears an animated LED-circuit skin (canvas texture: green banding,
   hot/dead pixels, upward pulse, glitch row-tearing)
-- has hollow void eyes (black spheres overfilling empty eye sockets) and
-  a mouth slit
+- has hollow void eyes (black spheres overfilling empty eye sockets); the
+  mouth is carried by FLAME's own lips in the LED skin (no separate prop)
 - tracks the cursor within hard rotation limits and has autonomous idle
   behavior (shoulder glances, "notepad" dips)
 - **shape-shifts** between five baked identities through a turbulent
@@ -147,8 +147,8 @@ origins — `file://`/`Origin: null` + localhost/loopback only, not `*`; `_allow
    FLAME decoder in the browser.
 9. **Speech composes via a 7th morph slot** held at influence 1, with
    frames lerped into its attribute each tick — so the head can keep
-   talking through an identity morph. Static mouth-slit prop hides while
-   speaking (FLAME's real lips animate).
+   talking through an identity morph. FLAME's real lips (in the LED skin)
+   carry the mouth — there's no separate mouth-slit prop.
 10. **Sparse anim format** (`--min-move`, default 0.3 mm): speech models
     micro-jitter every vertex; sub-threshold motion is invisible but was
     ~40% of file size. 99.7% of motion energy retained on the test clip.
